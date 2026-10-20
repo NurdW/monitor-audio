@@ -6,6 +6,20 @@ Drag your browser to the TV and its sound goes to the TV. Drag it back to your
 main screen and the sound comes back to your desk speakers. Games, Discord and
 music players follow the same rule.
 
+## Get it
+
+Prebuilt file for x86-64: download `monitor-audio-1.0.0-x86_64.AppImage` from
+[Releases](../../releases), then in a terminal:
+
+```bash
+chmod +x ~/Downloads/monitor-audio-1.0.0-x86_64.AppImage
+~/Downloads/monitor-audio-1.0.0-x86_64.AppImage
+```
+
+Needs KDE Plasma on Wayland, and `python3-pyside6` (Arch `python-pyside6`) for
+the control panel. The AppImage writes files into your home directory only, and
+tells you what it is about to do before it does it.
+
 ## What you need
 
 | Requirement | Why |

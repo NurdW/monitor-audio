@@ -6,8 +6,11 @@ import os
 import subprocess
 import time
 
-spec = importlib.util.spec_from_file_location(
-    "ma", "/home/Nurd/monitor-audio/backend/monitor-audio.py")
+# Located relative to this file, so a clone runs the copy it came with instead of
+# whatever checkout happens to live on the machine.
+BACKEND = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                       "backend", "monitor-audio.py")
+spec = importlib.util.spec_from_file_location("ma", BACKEND)
 ma = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(ma)
 
