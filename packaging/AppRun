@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# Entry point inside the AppImage.
+#
+# This is a deliberately small AppImage: it carries the program but borrows the
+# system's python3 and Qt, which every KDE Plasma desktop already has. That keeps
+# the file a few hundred kilobytes instead of a few hundred megabytes. The cost is
+# that a machine without PySide6 needs that one package, so this script detects it
+# and says which package to install instead of dying with an import error.
+
+set -u
+
+if [ -n "${APPDIR:-}" ]; then
+    APP_DIR="$APPDIR"
+else
+    APP_DIR="$(dirname "$(readlink -f "$0")")"
+fi
+
+BUNDLE="${MONITOR_AUDIO_BUNDLE:-$APP_DIR/usr/share/monitor-audio}"
+
+announce() {
+    # A double-clicked AppImage has no terminal, so the message has to go through
+    # whatever dialog program this desktop provides.
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "Monitor Audio" --error "$1"
+    elif command -v zenity >/dev/null 2>&1; then
+        zenity --error --title="Monitor Audio" --text="$1"
+    else
+        printf '%s\n' "$1" >&2
+    fi
+}
+
+install_hint() {
+    local id like
+    id=""
+    like=""
+    if [ -r /etc/os-release ]; then
+        # shellcheck disable=SC1091
+        id="$(. /etc/os-release; echo "${ID:-}")"
+        like="$(. /etc/os-release; echo "${ID_LIKE:-}")"
+    fi
+    case " $id $like " in
+        *fedora*|*rhel*|*centos*)   echo "sudo dnf install python3-pyside6" ;;
+        *ubuntu*|*debian*|*neon*)   echo "sudo apt install python3-pyside6" ;;
+        *arch*|*manjaro*)           echo "sudo pacman -S python-pyside6" ;;
+        *opensuse*|*suse*|*sles*)   echo "sudo zypper install python3-PySide6" ;;
+        *) echo "install the PySide6 package for python3 using your package manager" ;;
+    esac
+}
+
+find_python() {
+    local candidate
+    for candidate in python3 /usr/bin/python3 /usr/local/bin/python3; do
+        if command -v "$candidate" >/dev/null 2>&1 \
+           && "$candidate" -c 'import PySide6' >/dev/null 2>&1; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if [ ! -f "$BUNDLE/ui/monitor_audio_ui.py" ]; then
+    announce "This AppImage is incomplete: $BUNDLE/ui/monitor_audio_ui.py is missing."
+    exit 1
+fi
+
+PYTHON="$(find_python)" || {
+    announce "Monitor Audio needs PySide6 (the Qt bindings for python3), which this
+system does not have yet.
+
+Run this in a terminal, then start Monitor Audio again:
+
+    $(install_hint)"
+    exit 1
+}
+
+export MONITOR_AUDIO_BUNDLE="$BUNDLE"
+exec "$PYTHON" "$BUNDLE/ui/monitor_audio_ui.py" "$@"

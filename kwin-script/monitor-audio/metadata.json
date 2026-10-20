@@ -1,0 +1,12 @@
+{
+    "KPackageStructure": "KWin/Script",
+    "KPlugin": {
+        "Description": "Route an app's audio to the speakers belonging to the monitor its window is on",
+        "Icon": "audio-volume-high",
+        "Id": "monitor-audio",
+        "License": "MIT",
+        "Name": "Monitor Audio Routing",
+        "Version": "1.0"
+    },
+    "X-Plasma-API": "javascript"
+}
