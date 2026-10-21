@@ -100,6 +100,18 @@ impl Service {
         .unwrap_or_else(|err| format!("reset failed: {}", err))
     }
 
+    /// Answer "which output would each of these displays use?" with the same code
+    /// the routing itself uses, so the control panel never has to guess. The panel
+    /// used to keep its own copy of those rules and its table disagreed with what
+    /// was happening.
+    #[zbus(name = "Resolve")]
+    async fn resolve(&self, models_json: &str) -> String {
+        let models_json = models_json.to_string();
+        tokio::task::spawn_blocking(move || cli_resolve(&models_json))
+            .await
+            .unwrap_or_else(|err| format!("resolve failed: {}", err))
+    }
+
     #[zbus(name = "Forget")]
     async fn forget(&self, window: &str) -> String {
         let state = self.state.clone();
