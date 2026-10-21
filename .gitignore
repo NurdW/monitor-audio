@@ -3,3 +3,4 @@ dist/
 tools/
 __pycache__/
 *.pyc
+rust/target/

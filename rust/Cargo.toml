@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/monitor-audio-core"]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "MIT"
+
+# Static release build: the whole point of the rewrite is an AppImage that needs
+# no python3-pyside6 on the user's machine.
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true

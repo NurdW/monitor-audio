@@ -1,0 +1,13 @@
+[package]
+name = "monitor-audio-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "monitor_audio_core"
+path = "src/lib.rs"
+
+[dependencies]
+serde_json = "1"
+regex = "1"
