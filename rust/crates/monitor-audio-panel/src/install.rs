@@ -257,6 +257,31 @@ mod tests {
     }
 
     #[test]
+    fn systemd_accepts_the_generated_unit() {
+        // Checked with the tool that will actually load it, rather than by
+        // eyeballing the string: a typo here means the service never starts and
+        // the only symptom is that nothing happens.
+        let path = std::env::temp_dir().join(format!("ma-unit-{}.service", std::process::id()));
+        std::fs::write(&path, unit_text(Path::new("/bin/sleep"))).expect("write unit");
+        let analysis = std::process::Command::new("systemd-analyze")
+            .args(["verify", &path.to_string_lossy()])
+            .output();
+        match analysis {
+            Ok(output) => {
+                let complaints = String::from_utf8_lossy(&output.stderr).to_string();
+                let about_this_unit: Vec<&str> = complaints
+                    .lines()
+                    .filter(|line| line.contains(&path.file_name().unwrap().to_string_lossy().to_string()))
+                    .collect();
+                assert!(about_this_unit.is_empty(), "systemd rejected the unit: {:?}", about_this_unit);
+            }
+            // A machine without the tool is a reason to say so, not to pass quietly.
+            Err(err) => eprintln!("skipped: systemd-analyze is not available here ({})", err),
+        }
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
     fn install_tells_systemd_and_kwin_about_the_change() {
         let roots = temp_roots("commands");
         let binary = fake_binary(&roots);

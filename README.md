@@ -166,3 +166,27 @@ rm ~/.local/share/monitor-audio/monitor-audio.py
 rm -r ~/.local/share/kwin/scripts/monitor-audio
 kwriteconfig6 --file kwinrc --group Plugins --key monitor-audioEnabled --delete
 ```
+
+## The Rust implementation (branch `rust-rewrite`)
+
+The same program rewritten in Rust: the service, the control panel, and the
+install logic. The KWin script is unchanged JavaScript - KWin only loads QML and
+JavaScript, so that part cannot be anything else.
+
+The reason to care is the file you share. The Python build is 943 KB and needs
+`python3-pyside6` installed on the machine you send it to. The Rust build is
+about 5.4 MB and needs nothing:
+
+```bash
+./rust/build-appimage.sh
+# -> dist/monitor-audio-rust-<version>-x86_64.AppImage
+```
+
+Run `./check.sh` for the Python checks and `cargo test` inside `rust/` for the
+Rust ones. `rust/RUST-PLAN.md` (kept at the repository root as `RUST-PLAN.md`)
+records which behaviour had to survive the port and why.
+
+Layout: `rust/crates/monitor-audio-core` holds the decisions and has no D-Bus and
+no GUI, so it is testable on its own; `monitor-audio-daemon` is the service;
+`monitor-audio-panel` is the window. The panel finds the service next to itself,
+which is what makes the two belong to one file.
