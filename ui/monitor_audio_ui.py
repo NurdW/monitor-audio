@@ -86,19 +86,25 @@ def script_loaded():
 
 
 def fetch_report(backend):
-    """Ask the service what it currently knows; None when that is not possible."""
+    """Ask the service what it currently knows.
+
+    Returns (report, problem), report being None when that is not possible and
+    problem then saying why in the panel's own words: a service that is running
+    but slow, or answering badly, is not the same thing as one that is absent,
+    and the panel used to claim "not running" for all three.
+    """
     if not backend:
-        return None
+        return None, "the service file is not installed"
     ok, out = run([sys.executable, backend, "json"], timeout=20)
     if not ok:
-        return None
+        return None, "asking the service failed: %s" % (out or "no output")
     start = out.find("{")
     if start < 0:
-        return None
+        return None, "the service answered without json: %s" % (out[:80] or "no output")
     try:
-        return json.loads(out[start:])
-    except json.JSONDecodeError:
-        return None
+        return json.loads(out[start:]), None
+    except json.JSONDecodeError as exc:
+        return None, "the service answered unreadable json: %s" % exc
 
 
 def make_tone(path, seconds=1.5, frequency=440):
@@ -267,12 +273,24 @@ class Window(QWidget):
 
     def write_config(self, config):
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+        # Written to a temporary file and moved into place. The service re-reads
+        # this file every few seconds, and a half-written one would quietly drop
+        # it back to its defaults while the panel still looked saved.
+        fd, tmp = tempfile.mkstemp(prefix="config.", dir=os.path.dirname(CONFIG_PATH))
         try:
-            with open(CONFIG_PATH, "w") as handle:
+            with os.fdopen(fd, "w") as handle:
                 json.dump(config, handle, indent=2)
                 handle.write("\n")
+            os.replace(tmp, CONFIG_PATH)
         except OSError as exc:
-            QMessageBox.warning(self, "Could not save", str(exc))
+            # The save is the failure being reported either way; a temp file left
+            # behind is worth a line, not worth hiding.
+            try:
+                os.unlink(tmp)
+                detail = ""
+            except OSError as cleanup:
+                detail = "\n\nA temporary file was left behind: %s" % cleanup
+            QMessageBox.warning(self, "Could not save", "%s%s" % (exc, detail))
 
     def set_override(self, model, output_name):
         """Record the choice for one display; empty output_name means decide automatically."""
@@ -423,11 +441,26 @@ class Window(QWidget):
         return None
 
     def refresh(self):
+        if self.isMinimized():
+            # Nothing on screen to update, and a refresh is not free: a python
+            # process here, plus pactl and pw-dump over in the service.
+            return
         backend = self.backend_path()
-        report = fetch_report(backend) if service_running() else None
+        # One call covers both cases: the command answers with a partial report of
+        # its own when the service is unreachable, so asking busctl first was a
+        # second process every few seconds to learn what this one already knows.
+        report, problem = fetch_report(backend)
         if report is None:
+            # Fall back to the settings file itself, so the switches and the
+            # per-display choices still describe what is saved rather than
+            # silently resetting to defaults while the service is unreachable.
+            saved = self.read_config()
             report = {"service_running": False, "outputs": [], "routes": [], "streams": [],
-                      "config": {"enabled": True, "manual_output": {}}}
+                      "config": {"enabled": bool(saved.get("enabled", True)),
+                                 "keep_awake": bool(saved.get("keep_awake", True)),
+                                 "manual_output": saved.get("manual_output") or {}}}
+            if problem:
+                self.status_text = problem
 
         outputs = report["outputs"]
         output_names = [o["name"] for o in outputs]
@@ -539,20 +572,23 @@ class Window(QWidget):
             if all(route["model"] != model for model, _ in rows) and route["model"]:
                 rows.append((route["model"], ""))
 
-        models = [model for model, _ in rows]
-        resolved = self.resolutions(models)
-        signature = (tuple(rows), tuple(output_names), tuple(sorted(overrides.items())),
-                     tuple(sorted((k, tuple(sorted(v.items())))
-                                  for k, v in resolved.items())))
+        # Everything a row can show is decided by these three, so the service is
+        # only asked once one of them moves. Asking every few seconds about a
+        # desktop that is not changing cost another python process plus two
+        # PipeWire dumps, for an answer that was then thrown away.
+        signature = (tuple(rows), tuple(output_names), tuple(sorted(overrides.items())))
         if signature == self.displays_signature:
             return
         self.displays_signature = signature
+        resolved = self.resolutions([model for model, _ in rows])
 
         why_words = {
             "display": "Chosen because an output names this display.",
             "fallback": "This display carries no audio of its own, so it uses the "
                         "fallback output.",
             "override": "You chose this one.",
+            "override-miss": "You chose an output that is not present right now, "
+                             "so nothing is routed to this display.",
             "none": "No output matches this display and no fallback is available.",
         }
 
@@ -569,11 +605,21 @@ class Window(QWidget):
             for name in output_names:
                 combo.addItem(descriptions[name], name)
             chosen = overrides.get(model)
-            if chosen:
-                index = combo.findData(chosen)
-                if index >= 0:
-                    combo.setCurrentIndex(index)
-            reason = "override" if chosen else info.get("how", "none")
+            index = combo.findData(chosen) if chosen else -1
+            if chosen and index < 0:
+                # Settings written before this panel stored output names hold the
+                # output's description instead, which the service accepts too.
+                # Matching only the name left such a display showing "Automatic"
+                # while the routing was in fact following the saved choice.
+                index = next((i for i in range(1, combo.count())
+                              if combo.itemText(i) == chosen), -1)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+            # Driven by what matched, not by whether a choice exists: a saved
+            # choice naming an output that is gone resolves to override-miss in
+            # the service, and the row has to say that rather than claim a choice
+            # that is not in force.
+            reason = "override" if index >= 0 else info.get("how", "none")
             combo.setToolTip("%s\n%s" % (info.get("description") or "nothing",
                                          why_words.get(reason, "")))
             # Connected only after the saved choice is in place: setting the index
@@ -596,6 +642,21 @@ class Window(QWidget):
         for row, values in enumerate(rows):
             for column, value in enumerate(values):
                 table.setItem(row, column, QTableWidgetItem(value))
+
+    def showEvent(self, event):
+        """Start polling again once the window is on screen.
+
+        Polling stops while the window is hidden (see hideEvent): behind a closed
+        window nobody reads the answer, and producing it was most of this
+        program's idle cost.
+        """
+        super().showEvent(event)
+        self.timer.start(3000)
+        self.refresh()
+
+    def hideEvent(self, event):
+        self.timer.stop()
+        super().hideEvent(event)
 
     def closeEvent(self, event):
         self.timer.stop()

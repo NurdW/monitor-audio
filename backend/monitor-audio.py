@@ -94,7 +94,13 @@ BURST_INTERVAL_MS = 150
 # configuration is to keep one silent stream on it. That stream is visible in the
 # volume mixer, which is why it can be switched off in settings.
 KEEPALIVE_NAME = "monitor-audio-keepalive"
-KEEPALIVE_SECONDS = 300
+# How long the silent file plays for. paplay paces itself to the output and exits
+# when the file runs out, so the stream is renewed before that point rather than
+# after it: this is a floor on how long one hold lasts, not a timer allowed to
+# expire and leave the output idle until the next pass notices.
+KEEPALIVE_SECONDS = 1800
+KEEPALIVE_RENEW_BEFORE = 60
+# sink name -> {"process": Popen, "started": monotonic seconds}
 keepalive = {}
 failed_keepalive = set()
 
@@ -228,7 +234,7 @@ def sink_inputs():
             cur = {
                 "iid": line.strip().split("#", 1)[1].split()[0],
                 "sink": None, "client": None,
-                "pids": set(), "appkeys": set(), "titles": set(),
+                "pids": set(), "appkeys": set(), "titles": set(), "raw": set(),
             }
             streams.append(cur)
             continue
@@ -249,8 +255,10 @@ def sink_inputs():
         elif key in ("application.name", "application.id",
                      "application.process.binary", "node.name"):
             cur["appkeys"].add(norm(value))
+            cur["raw"].add(value)
         elif key == "media.name":
             cur["titles"].add(norm(value))
+            cur["raw"].add(value)
     return streams
 
 
@@ -380,10 +388,13 @@ def is_keepalive(stream):
     """Is this our own silent stream rather than somebody's audio?
 
     paplay puts the -n name on application.name and node.name, and puts the file
-    path in media.name, so both have to be checked; matching only the title would
-    never match and our stream would be treated as an app playing nothing.
+    path in media.name, so both have to be checked. They are compared as written
+    and not through norm(): norm keeps only the last part of a dashed name, so
+    our own "monitor-audio-keepalive" arrives as "keepalive" and matched nothing,
+    which left the silent stream listed in the panel as if it were an app playing
+    nothing, and open to being routed like one.
     """
-    return KEEPALIVE_NAME in stream["appkeys"] or KEEPALIVE_NAME in " ".join(stream["titles"])
+    return KEEPALIVE_NAME in stream["raw"] or SILENCE_PATH in stream["raw"]
 
 
 def apply_window(wid, reason, force, snap=None):
@@ -436,12 +447,15 @@ def apply_pending():
     if not wanted:
         return 0
     snap = snapshot()
-    if not snap["config"]["enabled"]:
-        return 0
     live = {s["iid"] for s in snap["streams"]}
     gone = [iid for iid in placed if iid not in live]
     for iid in gone:
         del placed[iid]
+    # Placements are pruned even while routing is switched off, because PipeWire
+    # reuses stream ids: a stale entry would make a brand-new stream look already
+    # placed and leave it on the wrong output after switching routing back on.
+    if not snap["config"]["enabled"]:
+        return 0
     if gone:
         # A player that drops its stream while paused usually makes a new one the
         # instant it resumes; that new stream is what needs catching quickly.
@@ -562,7 +576,14 @@ def tick():
 
 def ensure_silence():
     """Write the silent file the keep-alive streams read. True when it is usable."""
-    if os.path.exists(SILENCE_PATH):
+    # A file left over from an older version plays for less time than the service
+    # now expects, and every renewal would then read as a stream dying early.
+    # 44 bytes is the wav header ahead of the samples.
+    try:
+        present = os.path.getsize(SILENCE_PATH)
+    except OSError:
+        present = -1
+    if present >= 44 + 8000 * KEEPALIVE_SECONDS:
         return True
     try:
         with wave.open(SILENCE_PATH, "w") as handle:
@@ -589,9 +610,26 @@ def stop_process(process):
 def stop_keepalive(reason=""):
     if keepalive and reason:
         log("stopped holding %d output(s) awake (%s)" % (len(keepalive), reason))
-    for process in keepalive.values():
-        stop_process(process)
+    for entry in keepalive.values():
+        stop_process(entry["process"])
     keepalive.clear()
+
+
+def start_keepalive(name):
+    """Put one silent stream on `name`, replacing whatever entry it had. True if up."""
+    try:
+        process = subprocess.Popen(
+            ["paplay", "-n", KEEPALIVE_NAME, "--device=%s" % name, SILENCE_PATH],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as exc:
+        # Most likely paplay is missing on this machine; holding outputs awake
+        # is a nicety, so say so once per output and carry on routing.
+        log("could not start the silent stream to hold %s awake: %s" % (name, exc))
+        keepalive.pop(name, None)
+        failed_keepalive.add(name)
+        return False
+    keepalive[name] = {"process": process, "started": time.monotonic()}
+    return True
 
 
 def keepalive_tick():
@@ -627,26 +665,25 @@ def keepalive_tick():
     targets -= failed_keepalive
 
     for name in [n for n in keepalive if n not in targets]:
-        stop_process(keepalive.pop(name))
+        stop_process(keepalive.pop(name)["process"])
 
     for name in targets:
-        process = keepalive.get(name)
-        if process is not None and process.poll() is None:
-            continue
-        if process is not None:
-            log("silent stream on %s ended early; starting another" % name)
-        try:
-            keepalive[name] = subprocess.Popen(
-                ["paplay", "-n", KEEPALIVE_NAME, "--device=%s" % name, SILENCE_PATH],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except OSError as exc:
-            # Most likely paplay is missing on this machine; holding outputs awake
-            # is a nicety, so say so once per output and carry on routing.
-            log("could not start the silent stream to hold %s awake: %s" % (name, exc))
-            keepalive.pop(name, None)
-            failed_keepalive.add(name)
-            continue
-        log("holding %s awake with a silent stream" % name)
+        entry = keepalive.get(name)
+        if entry is not None:
+            running = entry["process"].poll() is None
+            due = (time.monotonic() - entry["started"]
+                   >= KEEPALIVE_SECONDS - KEEPALIVE_RENEW_BEFORE)
+            if running and not due:
+                continue
+            log("silent stream on %s %s; starting another"
+                % (name, "is about to run out" if running else "ended early"))
+            # The replacement goes up before the old one comes down. A gap of even
+            # a few seconds is enough for the output to start suspending again,
+            # which is the very thing this exists to prevent; two silent streams
+            # on one output for a moment costs nothing.
+            stop_process(entry["process"])
+        if start_keepalive(name):
+            log("holding %s awake with a silent stream" % name)
 
 
 class Service(dbus.service.Object):
@@ -669,8 +706,6 @@ class Service(dbus.service.Object):
             return "ignoring window %s with unusable pid" % window
 
         appkeys = {norm(str(resource_class)), norm(os.path.basename(str(desktop_file)))}
-        if not load_config()["enabled"]:
-            return "paused: monitor-audio routing is switched off"
         try:
             with open("/proc/%s/comm" % pid) as handle:
                 appkeys.add(norm(handle.read()))
@@ -701,6 +736,12 @@ class Service(dbus.service.Object):
         elif moved_monitor:
             log("Route: window %s moved to display %s caption=%s"
                 % (window, model, str(caption)[:70]))
+
+        if not load_config()["enabled"]:
+            # The window is still remembered. A window that arrived while routing
+            # was switched off used to stay unknown after switching it back on,
+            # silent until its title changed or it crossed onto another display.
+            return "remembered window %s; routing is switched off" % window
 
         # A window arriving, or crossing onto another display, is followed shortly
         # by that app creating a stream. A caption change alone is not worth it:

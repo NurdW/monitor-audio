@@ -6,7 +6,7 @@
         "Id": "monitor-audio",
         "License": "MIT",
         "Name": "Monitor Audio Routing",
-        "Version": "1.0"
+        "Version": "1.0.0"
     },
     "X-Plasma-API": "javascript"
 }

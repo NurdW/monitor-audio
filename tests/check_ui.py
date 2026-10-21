@@ -145,3 +145,6 @@ finally:
             handle.write(backup)
 
 print("\n%s" % ("ALL PASS" if not fails else "FAILURES: %s" % fails))
+# Without this the runner sees success whatever the checks found, because a
+# script that only prints its verdict always exits 0.
+sys.exit(1 if fails else 0)

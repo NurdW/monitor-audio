@@ -12,7 +12,7 @@ VERSION="$(tr -d '[:space:]' < "$ROOT/VERSION")"
 ARCH="${ARCH:-$(uname -m)}"
 APPDIR="$ROOT/build/monitor-audio.AppDir"
 DIST="$ROOT/dist"
-TOOL="${APPMAGETOOL:-$ROOT/tools/appimagetool-$ARCH.AppImage}"
+TOOL="${APPIMAGETOOL:-$ROOT/tools/appimagetool-$ARCH.AppImage}"
 BUNDLE="$APPDIR/usr/share/monitor-audio"
 
 # mksquashfs is needed to pack the result. appimagetool carries its own copy, so

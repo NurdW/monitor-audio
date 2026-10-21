@@ -9,7 +9,8 @@ music players follow the same rule.
 ## Get it
 
 Prebuilt file for x86-64: download `monitor-audio-1.0.0-x86_64.AppImage` from
-[Releases](../../releases), then in a terminal:
+the releases page of wherever you got it (there is no link here that a local
+clone can resolve), then in a terminal:
 
 ```bash
 chmod +x ~/Downloads/monitor-audio-1.0.0-x86_64.AppImage
