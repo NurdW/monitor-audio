@@ -8,13 +8,13 @@ music players follow the same rule.
 
 ## Get it
 
-Prebuilt file for x86-64: download `monitor-audio-1.0.0-x86_64.AppImage` from
+Prebuilt file for x86-64: download `monitor-audio-1.0.1-x86_64.AppImage` from
 the releases page of wherever you got it (there is no link here that a local
 clone can resolve), then in a terminal:
 
 ```bash
-chmod +x ~/Downloads/monitor-audio-1.0.0-x86_64.AppImage
-~/Downloads/monitor-audio-1.0.0-x86_64.AppImage
+chmod +x ~/Downloads/monitor-audio-1.0.1-x86_64.AppImage
+~/Downloads/monitor-audio-1.0.1-x86_64.AppImage
 ```
 
 Needs KDE Plasma on Wayland, and `python3-pyside6` (Arch `python-pyside6`) for
@@ -35,8 +35,8 @@ AppImage tells you which one package to install instead of crashing.
 ## Using the AppImage
 
 ```bash
-chmod +x monitor-audio-1.0.0-x86_64.AppImage
-./monitor-audio-1.0.0-x86_64.AppImage
+chmod +x monitor-audio-1.0.1-x86_64.AppImage
+./monitor-audio-1.0.1-x86_64.AppImage
 ```
 
 Or just double-click it. On a few distributions (recent Ubuntu, Fedora with
