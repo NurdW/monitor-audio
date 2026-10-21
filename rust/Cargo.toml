@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/monitor-audio-core"]
+members = ["crates/monitor-audio-core", "crates/monitor-audio-daemon"]
 
 [workspace.package]
 version = "1.0.0"

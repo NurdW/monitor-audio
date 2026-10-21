@@ -29,6 +29,10 @@ pub struct Stream {
     pub pids: BTreeSet<String>,
     pub appkeys: BTreeSet<String>,
     pub titles: BTreeSet<String>,
+    /// The same application and title values as written, not folded. Telling our
+    /// own silent stream apart from a stranger's needs the exact text: folding
+    /// "monitor-audio-keepalive" leaves "keepalive", which matches nothing.
+    pub raw: BTreeSet<String>,
 }
 
 /// `[name, description]` pairs, in the order pactl listed them: the first match
@@ -93,9 +97,11 @@ pub fn parse_sink_inputs(text: &str) -> Vec<Stream> {
             // of them are kept because different clients set different subsets.
             "application.name" | "application.id" | "application.process.binary" | "node.name" => {
                 last.appkeys.insert(norm(&value));
+                last.raw.insert(value);
             }
             "media.name" => {
                 last.titles.insert(norm(&value));
+                last.raw.insert(value);
             }
             _ => {}
         }
