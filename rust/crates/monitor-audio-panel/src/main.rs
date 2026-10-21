@@ -554,8 +554,10 @@ mod tests {
         let mut panel = blank();
         for tab in [Tab::Monitors, Tab::Applications, Tab::Streams, Tab::Log] {
             panel.tab = tab;
-            // egui needs a real pass, the same one a frame would give it.
-            context.run(egui::RawInput::default(), |ctx| panel.draw(ctx));
+            // egui needs a real pass, the same one a frame would give it, and the
+            // pass has to actually put something on the screen.
+            let output = context.run(egui::RawInput::default(), |ctx| panel.draw(ctx));
+            assert!(!output.shapes.is_empty(), "the tab drew nothing at all");
         }
     }
 
@@ -569,7 +571,8 @@ mod tests {
         panel.resolutions = serde_json::json!({});
         for tab in [Tab::Monitors, Tab::Applications, Tab::Streams, Tab::Log] {
             panel.tab = tab;
-            context.run(egui::RawInput::default(), |ctx| panel.draw(ctx));
+            let output = context.run(egui::RawInput::default(), |ctx| panel.draw(ctx));
+            assert!(!output.shapes.is_empty(), "an empty report must still draw the window");
         }
     }
 
