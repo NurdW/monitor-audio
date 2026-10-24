@@ -334,6 +334,21 @@ mod tests {
     }
 
     #[test]
+    fn the_kwin_script_registers_every_window_not_just_the_ones_that_move() {
+        // A browser is one process for several windows and the service tells them
+        // apart by caption. A window it never heard of leaves no rival, and the
+        // window that did move then claims that window's audio too - which silences
+        // the monitor you are still using. Registration is what prevents it.
+        assert!(KWIN_MAIN_JS.contains("workspace.windowAdded.connect"), "no registration on add");
+        assert!(KWIN_MAIN_JS.contains("workspace.stackingOrder.forEach"), "no registration at load");
+        let registration = KWIN_MAIN_JS
+            .split("workspace.stackingOrder.forEach")
+            .nth(1)
+            .unwrap_or("");
+        assert!(registration.contains("routeWindow"), "existing windows are watched but never reported");
+    }
+
+    #[test]
     fn the_embedded_kwin_script_is_the_one_in_the_repository() {
         // The copy inside the binary is what gets installed; if it drifts from the
         // source the panel installs code nobody has read.

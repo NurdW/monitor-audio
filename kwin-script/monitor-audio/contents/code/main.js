@@ -62,8 +62,19 @@ function watch(c) {
     }
 }
 
-workspace.windowAdded.connect(watch);
-workspace.stackingOrder.forEach(watch);
+// Every window is reported, not only the ones that later move. A browser is one
+// process for several windows and the service tells them apart by caption, so a
+// window it has never heard of leaves no rival for the one that did move - and the
+// moved window then claims that window's audio too, silencing the monitor you are
+// still using. Registering up front is what makes "no rivals" mean "only window".
+workspace.windowAdded.connect(c => {
+    watch(c);
+    routeWindow(c);
+});
+workspace.stackingOrder.forEach(c => {
+    watch(c);
+    routeWindow(c);
+});
 
 // Window has no "windowClosed" signal to connect to per window; the workspace
 // reports removals. Without this the service keeps routing to a window that no

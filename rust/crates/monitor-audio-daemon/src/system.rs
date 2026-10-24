@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use monitor_audio_core::config::{self, Config};
 use monitor_audio_core::snapshot::{self, Sink, Stream};
@@ -108,6 +110,39 @@ impl Snapshot {
     }
 }
 
+/// How long a gathered snapshot may be reused for a burst of Route calls.
+///
+/// The desktop integration reports every window when it loads, and each report
+/// used to spawn pactl twice and pw-dump once: thirty windows meant ninety
+/// subprocesses in a second, on a machine that is already busy logging in. A
+/// short window collapses that without ever acting on data a polling pass has not
+/// already seen. A move made inside the window is re-checked by the next pass.
+pub const ROUTE_CACHE_TTL: Duration = Duration::from_millis(150);
+
+static SNAPSHOT_CACHE: Mutex<Option<(Instant, Arc<Snapshot>)>> = Mutex::new(None);
+
+/// A snapshot for a Route call, reused briefly while the desktop reports a burst
+/// of windows. The polling pass uses `Snapshot::gather` and always sees fresh data.
+pub fn gather_cached(log: Log) -> Arc<Snapshot> {
+    let mut cache = match SNAPSHOT_CACHE.lock() {
+        Ok(cache) => cache,
+        Err(poisoned) => {
+            // Another thread died mid-gather. The cache holds no invariant anyone
+            // relies on, so take it back and carry on rather than stop the service.
+            log("the snapshot cache lock was poisoned; recovering");
+            poisoned.into_inner()
+        }
+    };
+    if let Some((when, snapshot)) = cache.as_ref() {
+        if when.elapsed() < ROUTE_CACHE_TTL {
+            return snapshot.clone();
+        }
+    }
+    let snapshot = Arc::new(Snapshot::gather(log));
+    *cache = Some((Instant::now(), snapshot.clone()));
+    snapshot
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,6 +154,15 @@ mod tests {
         assert_eq!(path.file_name().and_then(|n| n.to_str()), Some("config.json"));
         assert_eq!(path.parent().and_then(|p| p.file_name()).and_then(|n| n.to_str()),
                    Some("monitor-audio"));
+    }
+
+    #[test]
+    fn a_burst_of_route_calls_shares_one_snapshot() {
+        // The point of the cache: the desktop reports every window at once and each
+        // report would otherwise spawn three helper processes.
+        let first = gather_cached(&|_: &str| {});
+        let second = gather_cached(&|_: &str| {});
+        assert!(Arc::ptr_eq(&first, &second), "the second call re-gathered instead of reusing");
     }
 
     #[test]

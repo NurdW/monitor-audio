@@ -124,7 +124,7 @@ pub fn client_pids(dump_json: &str, log: Log) -> HashMap<String, String> {
         }
     };
     let objects = match data.as_array() {
-        Some(objects) => objects.clone(),
+        Some(objects) => objects,
         None => {
             log("pw-dump returned json that is not a list; ignoring it");
             return HashMap::new();
@@ -133,7 +133,7 @@ pub fn client_pids(dump_json: &str, log: Log) -> HashMap<String, String> {
 
     let daemon_names = ["pipewire", "pipewire-pulse", "wireplumber"];
     let mut daemon_pids: BTreeSet<String> = BTreeSet::new();
-    for object in &objects {
+    for object in objects {
         let props = &object["info"]["props"];
         if daemon_names.iter().any(|name| props["application.name"].as_str() == Some(name)) {
             if let Some(pid) = props["pipewire.sec.pid"].as_i64() {
@@ -143,7 +143,7 @@ pub fn client_pids(dump_json: &str, log: Log) -> HashMap<String, String> {
     }
 
     let mut pids = HashMap::new();
-    for object in &objects {
+    for object in objects {
         if object["type"].as_str() != Some("PipeWire:Interface:Client") {
             continue;
         }

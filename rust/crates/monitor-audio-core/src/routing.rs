@@ -138,18 +138,16 @@ pub fn name_match(stream: &Stream, route: &Route) -> bool {
 /// Is this stream this window's audio? Never answers by guessing.
 pub fn stream_belongs(
     stream: &Stream,
-    wid: &str,
     route: &Route,
     pids_of_client: &HashMap<String, String>,
-    wanted: &HashMap<String, Route>,
+    has_rival: bool,
 ) -> bool {
     let owners = owner_pids(stream, pids_of_client);
     if owners.contains(&route.pid) {
         // Same process owns several routed windows: only the tab title may decide.
-        let rivals = wanted
-            .iter()
-            .any(|(other, other_route)| other != wid && other_route.pid == route.pid);
-        return if rivals { title_match(stream, route) } else { true };
+        // With a single known window there is nothing to decide between, and
+        // demanding a title match there would leave ordinary players silent.
+        return if has_rival { title_match(stream, route) } else { true };
     }
     owners.is_empty() && name_match(stream, route)
 }
@@ -255,7 +253,7 @@ Sink #48
         let mut stream = Stream { iid: "1".into(), ..Default::default() };
         stream.pids.insert("999".into());
         let route = Route { pid: "111".into(), ..Default::default() };
-        assert!(!stream_belongs(&stream, "w1", &route, &HashMap::new(), &HashMap::new()));
+        assert!(!stream_belongs(&stream, &route, &HashMap::new(), false));
     }
 
     #[test]
@@ -264,11 +262,11 @@ Sink #48
         stream.appkeys.insert("firefox".into());
         let mut route = Route { pid: "111".into(), ..Default::default() };
         route.appkeys.insert("firefox".into());
-        assert!(stream_belongs(&stream, "w1", &route, &HashMap::new(), &HashMap::new()));
+        assert!(stream_belongs(&stream, &route, &HashMap::new(), false));
 
         let mut other = Route { pid: "111".into(), ..Default::default() };
         other.appkeys.insert("vlc".into());
-        assert!(!stream_belongs(&stream, "w1", &other, &HashMap::new(), &HashMap::new()));
+        assert!(!stream_belongs(&stream, &other, &HashMap::new(), false));
     }
 
     #[test]
@@ -280,15 +278,11 @@ Sink #48
         let mut route = Route { pid: "111".into(), ..Default::default() };
         route.captions.insert("Stranger Things 4k".into());
 
-        let mut one_window = HashMap::new();
-        one_window.insert("w1".to_string(), route.clone());
-        assert!(stream_belongs(&stream, "w1", &route, &HashMap::new(), &one_window));
+        assert!(stream_belongs(&stream, &route, &HashMap::new(), false));
 
         // A second window from the same process: the title is now the only thing
         // that may claim the stream, and this window's title does not match.
-        let mut two_windows = HashMap::new();
-        two_windows.insert("w1".to_string(), route.clone());
-        two_windows.insert("w2".to_string(), Route { pid: "111".into(), ..Default::default() });
-        assert!(!stream_belongs(&stream, "w2", &two_windows["w2"], &HashMap::new(), &two_windows));
+        let other = Route { pid: "111".into(), ..Default::default() };
+        assert!(!stream_belongs(&stream, &other, &HashMap::new(), true));
     }
 }

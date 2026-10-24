@@ -84,9 +84,12 @@ impl Default for State {
 /// "monitor-audio-keepalive" arrives as "keepalive" and matched nothing, which
 /// left the silent stream listed in the panel as if it were an app playing
 /// nothing, and open to being routed like one.
-fn is_keepalive(stream: &Stream) -> bool {
-    let silence = silence_path().to_string_lossy().to_string();
+fn is_keepalive(stream: &Stream, silence: &str) -> bool {
     stream.raw.iter().any(|value| value.as_str() == KEEPALIVE_NAME || value.as_str() == silence)
+}
+
+fn silence_name() -> String {
+    silence_path().to_string_lossy().to_string()
 }
 
 fn process_alive(pid: &str) -> bool {
@@ -145,6 +148,17 @@ impl State {
         mover: &dyn Mover,
         log: Log,
     ) -> usize {
+        // Computed before the mutable borrow below, and from the map already held:
+        // the old version cloned every route into a second map on every pass for
+        // every window just to answer "is there another window with this pid".
+        let pid = match self.wanted.get(wid) {
+            Some(entry) => entry.pid.clone(),
+            None => return 0,
+        };
+        let has_rival = self
+            .wanted
+            .iter()
+            .any(|(other, other_entry)| other != wid && other_entry.pid == pid);
         let Some(entry) = self.wanted.get_mut(wid) else { return 0 };
         let (target, how) = routing::resolve_output(&entry.model, &snap.sinks, &snap.config, log);
         let Some(target) = target else {
@@ -168,18 +182,17 @@ impl State {
         }
 
         let route = entry.as_route();
-        let wanted: HashMap<String, Route> =
-            self.wanted.iter().map(|(wid, entry)| (wid.clone(), entry.as_route())).collect();
         let target_index = snap.index_of(&target).map(str::to_string);
+        let silence = silence_name();
         let mut moved = 0;
         for stream in &snap.streams {
-            if is_keepalive(stream) {
+            if is_keepalive(stream, &silence) {
                 continue;
             }
             if !force && self.placed.contains_key(&stream.iid) {
                 continue;
             }
-            if !routing::stream_belongs(stream, wid, &route, &snap.clients, &wanted) {
+            if !routing::stream_belongs(stream, &route, &snap.clients, has_rival) {
                 continue;
             }
             if stream.sink == target_index {
@@ -246,9 +259,10 @@ impl State {
     }
 
     pub fn describe_streams(&self, snap: &Snapshot) -> Vec<String> {
+        let silence = silence_name();
         snap.streams
             .iter()
-            .filter(|stream| !is_keepalive(stream))
+            .filter(|stream| !is_keepalive(stream, &silence))
             .map(|stream| {
                 let owners = routing::owner_pids(stream, &snap.clients);
                 let placed_by = self
@@ -293,10 +307,11 @@ impl State {
             })
             .collect();
 
+        let silence = silence_name();
         let streams: Vec<serde_json::Value> = snap
             .streams
             .iter()
-            .filter(|stream| !is_keepalive(stream))
+            .filter(|stream| !is_keepalive(stream, &silence))
             .map(|stream| {
                 serde_json::json!({
                     "id": stream.iid,
@@ -954,6 +969,63 @@ mod tests {
         let request = RouteRequest { pid, window: "w1".into(), model: "SAMSUNG".into(), ..Default::default() };
         state.handle_route(&request, &snap, &Recorder::default(), &quiet);
         assert!(state.burst_is_running(), "the stream arrives a moment after the window does");
+    }
+
+
+    fn titled(iid: &str, sink_index: &str, pid: &str, title: &str) -> Stream {
+        let mut stream = stream(iid, sink_index, pid);
+        stream.titles.insert(title.to_string());
+        stream
+    }
+
+    fn captioned(pid: &str, model: &str, caption: &str) -> RouteEntry {
+        let mut entry = route_entry(pid, model);
+        entry.captions.insert(caption.to_string());
+        entry
+    }
+
+    #[test]
+    fn one_browser_window_on_the_tv_only_moves_the_stream_whose_title_matches() {
+        // Two windows of one Firefox process on two displays: the caption is the
+        // only thing that says which tab's audio belongs to which window.
+        let mut state = State::default();
+        state.wanted.insert("tv".into(), captioned("100", "SAMSUNG", "stranger things"));
+        state.wanted.insert("desk".into(), captioned("100", "2778X", "reddit"));
+        let snap = snapshot(vec![
+            titled("5", "47", "100", "stranger things"),
+            titled("6", "47", "100", "reddit"),
+        ]);
+        let recorder = Recorder::default();
+        state.apply_window("tv", "test", false, &snap, &recorder, &quiet);
+        let moved: Vec<String> = recorder.moves.borrow().iter().map(|(iid, _)| iid.clone()).collect();
+        assert_eq!(moved, vec!["5".to_string()], "only the TV tab's stream may move");
+    }
+
+    #[test]
+    fn a_titled_stream_from_a_process_with_one_known_window_is_claimed() {
+        // The counterpart of the rule above, and the reason it is safe: with every
+        // window registered by the desktop integration, no rival genuinely means no
+        // other window, so an ordinary single-window player is never left silent
+        // even when its stream title has nothing in common with its caption.
+        let mut state = State::default();
+        state.wanted.insert("tv".into(), captioned("100", "SAMSUNG", "stranger things"));
+        let snap = snapshot(vec![titled("5", "47", "100", "stranger things")]);
+        let recorder = Recorder::default();
+        state.apply_window("tv", "test", false, &snap, &recorder, &quiet);
+        assert_eq!(recorder.moves.borrow().len(), 1);
+    }
+
+    #[test]
+    fn a_single_window_app_with_an_unrelated_stream_title_still_gets_its_audio() {
+        // The other rule, pulling the other way: a lone player whose stream title
+        // has nothing to do with its window caption must still be routed, or the
+        // guard above would silence ordinary players.
+        let mut state = State::default();
+        state.wanted.insert("tv".into(), captioned("200", "SAMSUNG", "some video - mpv"));
+        let snap = snapshot(vec![stream("7", "47", "200")]);
+        let recorder = Recorder::default();
+        state.apply_window("tv", "test", false, &snap, &recorder, &quiet);
+        assert_eq!(recorder.moves.borrow().len(), 1, "a lone window's stream has no rival to fear");
     }
 
     #[test]

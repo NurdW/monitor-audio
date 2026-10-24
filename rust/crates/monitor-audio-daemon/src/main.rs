@@ -58,7 +58,7 @@ impl Service {
         // Every path through this shells out to pactl or pw-dump, so it goes on a
         // blocking thread rather than holding up the D-Bus task.
         tokio::task::spawn_blocking(move || {
-            let snap = Snapshot::gather(&log);
+            let snap = system::gather_cached(&log);
             state
                 .lock()
                 .expect("state lock poisoned")
