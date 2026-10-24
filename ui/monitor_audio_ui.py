@@ -129,7 +129,7 @@ def make_tone(path, seconds=1.5, frequency=440):
 class Window(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Monitor Audio")
+        self.setWindowTitle("Monitor-Audio-Py")
         self.resize(880, 720)
         self.tempdir = tempfile.mkdtemp(prefix="monitor-audio-ui-")
         self.status_text = ""
@@ -666,7 +666,7 @@ class Window(QWidget):
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("Monitor Audio")
+    app.setApplicationName("Monitor-Audio-Py")
     window = Window()
     window.show()
     sys.exit(app.exec())

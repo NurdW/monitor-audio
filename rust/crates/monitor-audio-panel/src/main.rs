@@ -19,6 +19,11 @@ use install::{install_files, remove_files, Roots, SystemRunner, KWIN_SCRIPT_ID};
 
 const REFRESH_SECONDS: u64 = 3;
 
+/// The Python panel is shipped alongside this one, so the two windows have to be
+/// tellable apart in the taskbar and in Alt+Tab. The suffix is the only thing
+/// that says which program you are looking at.
+const APP_NAME: &str = "Monitor-Audio-Rust";
+
 #[derive(PartialEq, Eq)]
 enum Tab {
     Monitors,
@@ -511,7 +516,7 @@ fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native(
-        "Monitor Audio",
+        APP_NAME,
         options,
         Box::new(|_cc| Ok(Box::new(Panel::new()))),
     )
@@ -574,6 +579,12 @@ mod tests {
             let output = context.run(egui::RawInput::default(), |ctx| panel.draw(ctx));
             assert!(!output.shapes.is_empty(), "an empty report must still draw the window");
         }
+    }
+
+    #[test]
+    fn the_window_name_says_which_build_it_is() {
+        assert!(APP_NAME.starts_with("Monitor-Audio-"), "got {}", APP_NAME);
+        assert!(APP_NAME.ends_with("Rust"), "got {}", APP_NAME);
     }
 
     #[test]

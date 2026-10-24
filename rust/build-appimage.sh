@@ -44,7 +44,7 @@ cat > "$appdir/monitor-audio.desktop" <<'DESKTOP'
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=Monitor Audio
+Name=Monitor-Audio-Rust
 GenericName=Audio routing
 Comment=Follow a window's monitor with its audio output
 Exec=monitor-audio-panel

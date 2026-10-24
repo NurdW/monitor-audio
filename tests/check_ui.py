@@ -39,7 +39,9 @@ try:
     check("same settings path in both", ui.CONFIG_PATH, ma.CONFIG_PATH)
 
     window = ui.Window()
-    check("window title", window.windowTitle(), "Monitor Audio")
+    # The Rust panel is shipped alongside this one, so the two windows have to be
+    # tellable apart in the taskbar; the suffix is the only thing that says which.
+    check("window title", window.windowTitle(), "Monitor-Audio-Py")
     check("headline says running or not running",
           "Running" in window.headline.text() or "Not running" in window.headline.text())
 
