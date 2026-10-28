@@ -73,6 +73,34 @@ fn run(args: &[&str]) -> Result<String, String> {
     }
 }
 
+/// Write the panel's keys into the settings file, keeping every key it does not
+/// own.
+///
+/// `fallback_kind` is hand-edited and documented, so a file rebuilt from the
+/// panel's own fields alone would quietly reset it the first time a checkbox was
+/// touched. A file that cannot be parsed at all is not worth preserving, and the
+/// reason is printed rather than swallowed.
+fn merge_settings(path: &Path, changed: serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
+    let mut body = match std::fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&text)
+            .unwrap_or_else(|err| {
+                eprintln!("could not read {} as an object: {}; writing a fresh file", path.display(), err);
+                serde_json::Map::new()
+            }),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => serde_json::Map::new(),
+        Err(err) => return Err(format!("could not read {}: {}", path.display(), err)),
+    };
+    for (key, value) in changed {
+        body.insert(key, value);
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("could not create {}: {}", parent.display(), err))?;
+    }
+    std::fs::write(path, serde_json::Value::Object(body).to_string())
+        .map_err(|err| format!("could not write {}: {}", path.display(), err))
+}
+
 fn config_path() -> PathBuf {
     let base = match std::env::var("XDG_CONFIG_HOME") {
         Ok(value) if !value.is_empty() => PathBuf::from(value),
@@ -143,17 +171,20 @@ impl Panel {
             follow_log: true,
             tone: None,
             confirm_remove: false,
-            installed: Roots::from_home(Path::new(&std::env::var("HOME").unwrap_or_default()))
-                .unit_target
-                .exists(),
+            installed: Roots::from_env().is_some_and(|roots| roots.unit_target.exists()),
         };
         panel.read_settings();
         panel.refresh();
         panel
     }
 
-    fn roots(&self) -> Roots {
-        Roots::from_home(Path::new(&std::env::var("HOME").unwrap_or_default()))
+    /// The install targets, or nothing when `HOME` is missing.
+    ///
+    /// A panel that cannot say where home is must not install or remove: every
+    /// target is built by joining onto it, so a blank would become a relative
+    /// path into the current directory.
+    fn roots(&self) -> Option<Roots> {
+        Roots::from_env()
     }
 
     fn read_settings(&mut self) {
@@ -173,21 +204,13 @@ impl Panel {
     }
 
     fn write_settings(&mut self) {
-        let body = serde_json::json!({
-            "enabled": self.enabled,
-            "keep_awake": self.keep_awake,
-            "manual_output": self.overrides,
-        });
-        let path = config_path();
-        if let Some(parent) = path.parent() {
-            if let Err(err) = std::fs::create_dir_all(parent) {
-                self.status = format!("could not create {}: {}", parent.display(), err);
-                return;
-            }
-        }
-        self.status = match std::fs::write(&path, body.to_string()) {
-            Ok(()) => format!("saved to {}", path.display()),
-            Err(err) => format!("could not write {}: {}", path.display(), err),
+        let mut changed = serde_json::Map::new();
+        changed.insert("enabled".into(), self.enabled.into());
+        changed.insert("keep_awake".into(), self.keep_awake.into());
+        changed.insert("manual_output".into(), serde_json::to_value(&self.overrides).unwrap_or_default());
+        self.status = match merge_settings(&config_path(), changed) {
+            Ok(()) => format!("saved to {}", config_path().display()),
+            Err(err) => err,
         };
     }
 
@@ -238,8 +261,12 @@ impl Panel {
     }
 
     fn install(&mut self) {
+        let Some(roots) = self.roots() else {
+            self.status = "HOME is not set, so I cannot tell where to install. Refusing to guess.".into();
+            return;
+        };
         let exe = std::env::current_exe().unwrap_or_default();
-        let problems = install_files(&self.roots(), &exe, &SystemRunner);
+        let problems = install_files(&roots, &exe, &SystemRunner);
         self.installed = true;
         self.status = if problems.is_empty() {
             "Installed. Drag a window to another monitor to try it.".to_string()
@@ -249,7 +276,11 @@ impl Panel {
     }
 
     fn remove(&mut self) {
-        let problems = remove_files(&self.roots(), &SystemRunner);
+        let Some(roots) = self.roots() else {
+            self.status = "HOME is not set, so I cannot tell what to remove. Refusing to guess.".into();
+            return;
+        };
+        let problems = remove_files(&roots, &SystemRunner);
         self.installed = false;
         self.status = if problems.is_empty() {
             "Removed. Your display choices under ~/.config/monitor-audio were kept.".to_string()
@@ -267,12 +298,27 @@ impl Panel {
             self.status = format!("could not make the test tone: {}", err);
             return;
         }
+        // Spawned rather than waited on: `output()` would block the whole window
+        // for the length of the tone. A second click cuts the first one off.
+        if let Some(mut previous) = self.tone.take() {
+            if let Err(err) = previous.kill() {
+                self.status = format!("could not stop the previous tone: {}", err);
+            }
+            if let Err(err) = previous.wait() {
+                self.status = format!("could not reap the previous tone: {}", err);
+            }
+        }
         let argument = format!("--device={}", output);
-        match Command::new("paplay").arg(&argument).arg(&path).output() {
-            Ok(_) => self.status = format!("played a tone on {}", output),
+        match Command::new("paplay").arg(&argument).arg(&path)
+            .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(child) => {
+                self.tone = Some(child);
+                self.status = format!("playing a tone on {}", output);
+            }
             Err(err) => self.status = format!("could not play the tone: {}", err),
         }
-        self.tone = None;
     }
 
     fn refresh_log(&mut self) {
@@ -491,7 +537,10 @@ impl Panel {
             ui.label(format!(
                 "KWin script: {} · service unit: {}",
                 KWIN_SCRIPT_ID,
-                self.roots().unit_target.display()
+                match self.roots() {
+                    Some(roots) => roots.unit_target.display().to_string(),
+                    None => "unknown, HOME is not set".to_string(),
+                }
             ));
         });
     }
@@ -525,6 +574,84 @@ fn main() -> eframe::Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("ma-panel-{}-{}", std::process::id(), name));
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    fn two_keys() -> serde_json::Map<String, serde_json::Value> {
+        let mut map = serde_json::Map::new();
+        map.insert("enabled".into(), false.into());
+        map.insert("keep_awake".into(), true.into());
+        map
+    }
+
+    #[test]
+    fn saving_settings_keeps_keys_the_panel_does_not_control() {
+        // fallback_kind is only ever set by hand, so losing it would silently
+        // change where audio goes for anyone who had bothered to set it.
+        let path = scratch("settings").join("config.json");
+        std::fs::write(&path, r#"{"fallback_kind":"hdmi","manual_output":{"TV":"x"},"enabled":true}"#)
+            .expect("seed settings");
+        merge_settings(&path, two_keys()).expect("merge settings");
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read back")).expect("parse");
+        assert_eq!(saved["fallback_kind"], "hdmi");
+        assert_eq!(saved["enabled"], false);
+        assert_eq!(saved["keep_awake"], true);
+        assert_eq!(saved["manual_output"]["TV"], "x");
+    }
+
+    #[test]
+    fn a_settings_file_that_is_not_an_object_is_replaced_not_silently_kept() {
+        let path = scratch("broken").join("config.json");
+        std::fs::write(&path, "this is not json").expect("seed broken file");
+        merge_settings(&path, two_keys()).expect("recover from a broken file");
+        let saved: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read back")).expect("parse");
+        assert_eq!(saved["enabled"], false);
+        assert!(saved.get("fallback_kind").is_none());
+    }
+
+    #[test]
+    fn saving_settings_reports_a_file_it_cannot_write() {
+        // The panel must not report "saved" when the write was refused.
+        let dir = scratch("read-only");
+        let path = dir.join("config.json");
+        std::fs::write(&path, "{}").expect("seed settings");
+        // The file itself, not the directory: overwriting an existing file needs
+        // write permission on the file, and a read-only directory would still
+        // have allowed it.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400))
+            .expect("make the settings file read-only");
+        let error = merge_settings(&path, two_keys()).expect_err("should fail");
+        assert!(error.contains("could not write"), "unexpected error: {}", error);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("let the scratch file be cleaned up");
+    }
+
+    #[test]
+    fn the_test_tone_is_a_wav_file_that_says_the_right_thing_about_itself() {
+        let path = scratch("tone").join("tone.wav");
+        write_tone(&path).expect("write tone");
+        let bytes = std::fs::read(&path).expect("read tone");
+        assert_eq!(&bytes[0..4], b"RIFF");
+        assert_eq!(&bytes[8..12], b"WAVE");
+        assert_eq!(&bytes[36..40], b"data");
+        assert_eq!(u16::from_le_bytes(bytes[22..24].try_into().expect("channels")), 1);
+        let data_size = u32::from_le_bytes(bytes[40..44].try_into().expect("data size")) as usize;
+        // Two seconds of mono 48kHz at two bytes a sample, and the file must be
+        // exactly as long as its header claims or players complain.
+        assert_eq!(data_size, 48000 * 2 * 2);
+        assert_eq!(bytes.len(), 44 + data_size);
+        assert_eq!(
+            u32::from_le_bytes(bytes[4..8].try_into().expect("riff size")),
+            36 + data_size as u32
+        );
+    }
 
     /// A panel that never talks to the service: the drawing code must not depend on
     /// a running daemon, and a test must not rearrange a real desktop.

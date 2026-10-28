@@ -25,6 +25,27 @@ pub struct Roots {
 }
 
 impl Roots {
+    /// Refuse a home directory that is empty or relative.
+    ///
+    /// Every target below is built by joining onto this path, so an empty `HOME`
+    /// would turn `~/.local/share/...` into a relative path and the installer
+    /// would happily write into whatever directory the panel happened to be
+    /// started from - and `remove` would delete from there too.
+    pub fn from_home_checked(home: &Path) -> Option<Roots> {
+        let text = home.to_string_lossy();
+        if text.is_empty() || !home.is_absolute() {
+            return None;
+        }
+        Some(Roots::from_home(home))
+    }
+
+    pub fn from_env() -> Option<Roots> {
+        match std::env::var("HOME") {
+            Ok(value) if !value.is_empty() => Roots::from_home_checked(Path::new(&value)),
+            _ => None,
+        }
+    }
+
     pub fn from_home(home: &Path) -> Roots {
         Roots {
             backend_target: home.join(".local/share/monitor-audio/monitor-audio"),
@@ -310,6 +331,13 @@ mod tests {
         let problems = install_files(&roots, &binary, &AlwaysFails);
         assert!(!problems.is_empty(), "a command that failed must not pass silently");
         std::fs::remove_dir_all(roots.script_dir.parent().unwrap().parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn an_unusable_home_directory_is_refused_rather_than_used() {
+        assert!(Roots::from_home_checked(Path::new("")).is_none());
+        assert!(Roots::from_home_checked(Path::new("relative/path")).is_none());
+        assert!(Roots::from_home_checked(Path::new("/tmp/somewhere")).is_some());
     }
 
     #[test]
