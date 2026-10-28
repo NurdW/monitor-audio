@@ -1,192 +1,96 @@
 # Monitor Audio
 
-Move an application's sound to the speakers of the monitor its window is on.
-
-Drag your browser to the TV and its sound goes to the TV. Drag it back to your
-main screen and the sound comes back to your desk speakers. Games, Discord and
-music players follow the same rule.
-
-## Get it
-
-Prebuilt file for x86-64: download `monitor-audio-1.0.1-x86_64.AppImage` from
-the releases page of wherever you got it (there is no link here that a local
-clone can resolve), then in a terminal:
-
-```bash
-chmod +x ~/Downloads/monitor-audio-1.0.1-x86_64.AppImage
-~/Downloads/monitor-audio-1.0.1-x86_64.AppImage
-```
-
-Needs KDE Plasma on Wayland, and `python3-pyside6` (Arch `python-pyside6`) for
-the control panel. The AppImage writes files into your home directory only, and
-tells you what it is about to do before it does it.
+Drag a window onto another monitor and its audio follows it. Built for KDE
+Plasma on Wayland, where PipeWire decides an application's output when the stream
+starts and never revisits that choice.
 
 ## What you need
 
-| Requirement | Why |
-|---|---|
-| KDE Plasma 6 on Wayland | the window-to-monitor detection is a KWin script |
-| PipeWire | the audio side (`pactl` and `pw-dump`) |
-| `python3` with PySide6 | the control panel window |
+- KDE Plasma 6 on Wayland
+- PipeWire (the default on Fedora, Arch, openSUSE, Ubuntu 22.04+)
 
-Every KDE Plasma 6 desktop already has the first two. If PySide6 is missing the
-AppImage tells you which one package to install instead of crashing.
+## Run it
 
-## Using the AppImage
+Download `monitor-audio-rust-<version>-x86_64.AppImage` from
+[Releases](../../releases), then in a terminal:
 
 ```bash
-chmod +x monitor-audio-1.0.1-x86_64.AppImage
-./monitor-audio-1.0.1-x86_64.AppImage
+chmod +x ~/Downloads/monitor-audio-rust-1.0.1-x86_64.AppImage
+~/Downloads/monitor-audio-rust-1.0.1-x86_64.AppImage
 ```
 
-Or just double-click it. On a few distributions (recent Ubuntu, Fedora with
-`fuse3` restrictions) double-clicking fails because the AppImage cannot mount
-itself; run it with `--appimage-extract-and-run` in that case.
+The window offers **Install**, which puts three things in your home directory and
+tells you what it is about to do first: the service, a KWin script, and a systemd
+user unit. Nothing needs root. **Remove** takes all three back out and leaves your
+display choices alone.
 
-Press **Install** once. That puts three things in place:
+## How it works
 
-- `~/.local/share/monitor-audio/monitor-audio.py` - the background service
-- `~/.local/share/kwin/scripts/monitor-audio/` - the KWin script that notices
-  windows moving between monitors
-- `~/.config/systemd/user/monitor-audio.service` - so the service starts on login
+KWin tells the service which monitor each window sits on, along with that window's
+title. The service pairs a display with an audio output by matching the monitor's
+model name against PipeWire's output descriptions, then moves that window's
+streams with `pactl move-sink-input`.
 
-Then drag a window to another monitor. **Remove** undoes all three. Your display
-choices in `~/.config/monitor-audio/config.json` are kept either way.
+Two rules matter, and they are the reason the code looks the way it does:
+
+- **A stream is placed once and then left alone.** Only a real move to another
+  monitor may move it again, or an application that opens a stream while you are
+  mid-drag would fight you for it.
+- **Ownership is never guessed.** A browser is one process for several windows, so
+  the only thing that says which window a stream belongs to is the tab title. If
+  the title matches nothing, the stream is left where it is rather than moved on a
+  hunch. That is what lets one Firefox tab play on the TV while another keeps
+  working on your main monitor.
 
 ## Choosing which speaker each monitor uses
 
 The Monitors tab has one dropdown per display, and what it shows is what is
-actually in use. It reads `Automatic - <output>` while the service is deciding,
-and the plain output name once you have chosen one yourself. Hover it for the
-reason: an output that names this display, a display with no audio of its own
-using the fallback, or your own choice.
+actually in use: `Automatic - <output>` while the service is deciding, the plain
+output name once you have chosen. Hover it for the reason. Settings live in
+`~/.config/monitor-audio/config.json` and overrides are stored under the display's
+model name, so they survive replugging cables and changing the sound profile.
 
-Usually nothing is needed: a monitor whose model name PipeWire advertises (an
-HDMI or DisplayPort audio output carrying sound to that screen) is picked
-automatically, and a monitor with no speakers of its own falls back to the
-analogue output.
+## The silent stream, and why it is there
 
-When that guess is wrong - two screens showing the same model, a monitor that
-reports a name PipeWire never uses - pick the output from that dropdown. The
-choice is stored under the display's model name, so it survives replugging
-cables and changing the sound profile.
+WirePlumber suspends an idle output after about five seconds, and an HDMI output
+takes a moment to wake, which is the mute people hear when a video resumes after a
+pause. The service holds one silent stream on every output you route to so it never
+sleeps. That stream is visible in KDE's Volume Control as `monitor-audio-keepalive`
+— it is the only way to do this without writing PipeWire configuration. **Keep
+routed outputs awake** switches it off if you would rather not see it.
 
-The panel asks the running service what each display resolves to rather than
-working it out itself, so this table cannot describe a decision the routing is
-not making.
-
-## Two things worth knowing
-
-**Audio belongs to applications, not windows.** PipeWire routes per application
-stream. Two windows of the same program on two monitors still share one stream,
-unless the program puts something distinguishing in the window title - which
-browsers do, so separate Firefox tabs can be told apart.
-
-**It never fights you.** Once a stream has been placed the service leaves it
-alone. If you move something by hand in Volume Control, or a screen-sharing app
-grabs it, that stays put. Only dragging the window to a different monitor takes
-control back.
-
-## Why a new episode used to start from the wrong speakers
-
-A player that starts a new episode, or resumes after a pause, makes a brand-new
-audio stream, and PipeWire hands new streams the *default* output. The service
-corrects that afterwards, so the gap between the stream appearing and the
-correction was audible - measured at up to 2.4 seconds, average 1.9, because the
-service only looked every four seconds.
-
-It now looks again every 150 ms for a few seconds whenever something suggests a
-stream is coming: a window arriving on a display, or a stream it had placed
-disappearing (which is what pausing does). Measured on the same machine after
-the change: 0.00 seconds in five out of five trials. Title changes alone do not
-trigger this, because browsers rewrite titles constantly and polling fast after
-each one would keep a core busy for no reason.
-
-## Why resuming after being away used to go quiet
-
-An output that is not being used goes to sleep after five seconds, and an HDMI
-output takes a moment to come back. Re-asking it to stay awake does nothing - it
-is re-suspended immediately - so the service holds one **silent stream** on every
-output you are routing to, which is the only thing that works without writing any
-audio configuration.
-
-The cost is honest: that silent stream shows up in your volume mixer as
-`monitor-audio-keepalive` while a window is routed to that output. Untick
-**Keep routed outputs awake** to stop holding them, and accept the wake-up delay.
-It is also off entirely while routing is switched off, and it never appears in
-this program's own window.
-
-## Settings
-
-`~/.config/monitor-audio/config.json`, written by the control panel:
-
-| Key | Default | Meaning |
-|---|---|---|
-| `enabled` | `true` | routing on or off without uninstalling |
-| `keep_awake` | `true` | hold outputs awake with a silent stream |
-| `manual_output` | `{}` | display model -> output, when the automatic guess is wrong |
-| `fallback_kind` | `"analog"` | what a display with no speakers of its own uses |
-
-## Building it yourself
+## Building from source
 
 ```bash
-./build-appimage.sh          # -> dist/monitor-audio-<version>-<arch>.AppImage
+cd rust
+cargo build --release          # service and panel
+../check.sh                    # tests and clippy
+../rust/build-appimage.sh      # -> dist/monitor-audio-rust-<version>-x86_64.AppImage
 ```
 
-Nothing needs installing first: the script downloads `appimagetool`, which
-carries its own `mksquashfs`. Add `--assemble-only` to stop before packing and
-inspect or run the unpacked directory.
+Needs Rust (`rustup` minimal profile is enough) and, for the panel, whatever
+`eframe` pulls in. The AppImage build also needs `appimagetool` in `tools/`; the
+build script prints the download command if it is missing.
 
-## Layout
+### Layout
 
-```
-backend/monitor-audio.py       the service; owns the D-Bus name local.MonitorAudio
-kwin-script/monitor-audio/     KWin script; tells the service where windows went
-ui/monitor_audio_ui.py         the control panel
-packaging/                     AppRun, .desktop, icon, systemd unit
-tests/                         checks that need a live KDE + PipeWire session
-VERSION                        stamped into the output file name
-```
+| path | what it is |
+| --- | --- |
+| `rust/crates/monitor-audio-core` | the decisions: settings, PipeWire parsing, output and ownership matching. No D-Bus, no GUI, so it is testable alone |
+| `rust/crates/monitor-audio-daemon` | the service: D-Bus name `local.MonitorAudio`, the burst timer, the keep-alive |
+| `rust/crates/monitor-audio-panel` | the window (egui), and the install/remove logic |
+| `kwin-script/` | the KWin integration. JavaScript, because KWin only loads QML and JavaScript |
 
-## Command line
+The panel finds the service next to itself, which is what makes the two belong to
+one file rather than depending on what the machine already has.
 
-```bash
-python3 ~/.local/share/monitor-audio/monitor-audio.py status   # what it decided
-python3 ~/.local/share/monitor-audio/monitor-audio.py json     # same, as data
-python3 ~/.local/share/monitor-audio/monitor-audio.py reset    # forget placements
-journalctl --user -u monitor-audio.service                     # its log
-```
+## The Python version
 
-## Removing every trace by hand
+The original implementation was Python and PySide6. It is kept on the
+`python-legacy` branch and at tags `v1.0.0` and `v1.0.1`. It is not built or
+maintained here any more; the Rust build needs no Python on the target machine and
+that was the point of the rewrite.
 
-```bash
-systemctl --user disable --now monitor-audio.service
-rm ~/.config/systemd/user/monitor-audio.service
-rm ~/.local/share/monitor-audio/monitor-audio.py
-rm -r ~/.local/share/kwin/scripts/monitor-audio
-kwriteconfig6 --file kwinrc --group Plugins --key monitor-audioEnabled --delete
-```
+## License
 
-## The Rust implementation (branch `rust-rewrite`)
-
-The same program rewritten in Rust: the service, the control panel, and the
-install logic. The KWin script is unchanged JavaScript - KWin only loads QML and
-JavaScript, so that part cannot be anything else.
-
-The reason to care is the file you share. The Python build is 943 KB and needs
-`python3-pyside6` installed on the machine you send it to. The Rust build is
-about 5.4 MB and needs nothing:
-
-```bash
-./rust/build-appimage.sh
-# -> dist/monitor-audio-rust-<version>-x86_64.AppImage
-```
-
-Run `./check.sh` for the Python checks and `cargo test` inside `rust/` for the
-Rust ones. `rust/RUST-PLAN.md` (kept at the repository root as `RUST-PLAN.md`)
-records which behaviour had to survive the port and why.
-
-Layout: `rust/crates/monitor-audio-core` holds the decisions and has no D-Bus and
-no GUI, so it is testable on its own; `monitor-audio-daemon` is the service;
-`monitor-audio-panel` is the window. The panel finds the service next to itself,
-which is what makes the two belong to one file.
+MIT — see `LICENSE`.

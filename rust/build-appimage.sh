@@ -15,7 +15,8 @@ tool="$root/tools/appimagetool-x86_64.AppImage"
 
 if [ ! -x "$tool" ]; then
     echo "appimagetool is missing at $tool" >&2
-    echo "run ../build-appimage.sh once; it downloads the tool into tools/" >&2
+    echo "download it with:" >&2
+    echo "  curl -L -o \"$tool\" https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage && chmod +x \"$tool\"" >&2
     exit 1
 fi
 
