@@ -1792,6 +1792,7 @@ version = "1.0.0"
 dependencies = [
  "regex",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -1814,6 +1815,7 @@ dependencies = [
  "monitor-audio-core",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

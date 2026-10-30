@@ -122,12 +122,18 @@ mod tests {
 
     fn quiet(_msg: &str) {}
 
-    fn write_temp(name: &str, body: &str) -> std::path::PathBuf {
-        let mut path = std::env::temp_dir();
-        path.push(format!("monitor-audio-config-test-{}-{}", std::process::id(), name));
+    /// A settings file inside a directory that cleans itself up. The hand-written
+    /// `remove_file` this replaces was the last line of each test, so a failed
+    /// assertion skipped it and the file stayed in /tmp forever.
+    fn write_temp(name: &str, body: &str) -> (std::path::PathBuf, tempfile::TempDir) {
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("monitor-audio-config-test-{name}"))
+            .tempdir()
+            .expect("temp settings dir");
+        let path = dir.path().join("config.json");
         let mut file = std::fs::File::create(&path).expect("create temp settings");
         file.write_all(body.as_bytes()).expect("write temp settings");
-        path
+        (path, dir)
     }
 
     #[test]
@@ -138,26 +144,24 @@ mod tests {
 
     #[test]
     fn invalid_json_gives_defaults_and_says_so() {
-        let path = write_temp("bad", "{ not json");
+        let (path, _dir) = write_temp("bad", "{ not json");
         let messages = std::cell::RefCell::new(Vec::new());
         load_config(&path, &|msg| messages.borrow_mut().push(msg.to_string()));
         let messages = messages.borrow();
         assert_eq!(messages.len(), 1, "the failure must be reported: {:?}", messages);
         assert!(messages[0].contains("not valid json"));
-        std::fs::remove_file(&path).ok();
     }
 
     #[test]
     fn json_that_is_not_an_object_gives_defaults() {
-        let path = write_temp("array", "[1, 2, 3]");
+        let (path, _dir) = write_temp("array", "[1, 2, 3]");
         let config = load_config(&path, &quiet);
         assert_eq!(config, Config::default());
-        std::fs::remove_file(&path).ok();
     }
 
     #[test]
     fn wrong_types_fall_back_per_key_without_losing_the_rest() {
-        let path = write_temp(
+        let (path, _dir) = write_temp(
             "types",
             r#"{"enabled": false, "fallback_kind": 42, "manual_output": "nope", "keep_awake": 0}"#,
         );
@@ -166,18 +170,16 @@ mod tests {
         assert!(!config.keep_awake);
         assert_eq!(config.fallback_kind, FALLBACK_DEFAULT);
         assert!(config.manual_output.is_empty());
-        std::fs::remove_file(&path).ok();
     }
 
     #[test]
     fn overrides_are_read_and_non_strings_dropped() {
-        let path = write_temp(
+        let (path, _dir) = write_temp(
             "overrides",
             r#"{"manual_output": {"SAMSUNG": "hdmi", "2778X": 7}}"#,
         );
         let config = load_config(&path, &quiet);
         assert_eq!(config.manual_output.get("SAMSUNG").map(String::as_str), Some("hdmi"));
         assert!(!config.manual_output.contains_key("2778X"));
-        std::fs::remove_file(&path).ok();
     }
 }

@@ -111,8 +111,8 @@ mod tests {
 
     #[test]
     fn only_connected_outputs_are_listed() {
-        let root = std::env::temp_dir().join(format!("ma-drm-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let dir = tempfile::tempdir().expect("temp drm root");
+        let root = dir.path();
         let on = root.join("card0-DP-2");
         let off = root.join("card0-HDMI-A-1");
         std::fs::create_dir_all(&on).unwrap();
@@ -121,23 +121,21 @@ mod tests {
         std::fs::write(off.join("status"), "disconnected\n").unwrap();
         std::fs::write(on.join("edid"), edid_with_name("2778X")).unwrap();
         std::fs::write(off.join("edid"), edid_with_name("Gone TV")).unwrap();
-        let displays = connected_displays(&root);
+        let displays = connected_displays(root);
         assert_eq!(displays.len(), 1, "got {:?}", displays);
         assert_eq!(displays[0].model, "2778X");
         assert_eq!(displays[0].connector, "DP-2");
-        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
     fn a_connected_monitor_with_a_broken_edid_still_gets_a_row() {
-        let root = std::env::temp_dir().join(format!("ma-drm-broken-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let dir = tempfile::tempdir().expect("temp drm root");
+        let root = dir.path();
         let directory = root.join("card1-DP-1");
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(directory.join("status"), "connected\n").unwrap();
-        let displays = connected_displays(&root);
+        let displays = connected_displays(root);
         assert_eq!(displays.len(), 1);
         assert_eq!(displays[0].model, "DP-1", "the connector is better than an empty row");
-        std::fs::remove_dir_all(&root).ok();
     }
 }

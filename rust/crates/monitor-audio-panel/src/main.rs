@@ -591,10 +591,13 @@ mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ma-panel-{}-{}", std::process::id(), name));
-        std::fs::create_dir_all(&dir).expect("create scratch dir");
-        dir
+    /// A scratch directory that deletes itself, whether the test passes or fails.
+    fn scratch(name: &str) -> (PathBuf, tempfile::TempDir) {
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("ma-panel-{name}-"))
+            .tempdir()
+            .expect("create scratch dir");
+        (dir.path().to_path_buf(), dir)
     }
 
     fn two_keys() -> serde_json::Map<String, serde_json::Value> {
@@ -608,7 +611,8 @@ mod tests {
     fn saving_settings_keeps_keys_the_panel_does_not_control() {
         // fallback_kind is only ever set by hand, so losing it would silently
         // change where audio goes for anyone who had bothered to set it.
-        let path = scratch("settings").join("config.json");
+        let (dir, _scratch) = scratch("settings");
+        let path = dir.join("config.json");
         std::fs::write(&path, r#"{"fallback_kind":"hdmi","manual_output":{"TV":"x"},"enabled":true}"#)
             .expect("seed settings");
         merge_settings(&path, two_keys()).expect("merge settings");
@@ -622,7 +626,8 @@ mod tests {
 
     #[test]
     fn a_settings_file_that_is_not_an_object_is_replaced_not_silently_kept() {
-        let path = scratch("broken").join("config.json");
+        let (dir, _scratch) = scratch("broken");
+        let path = dir.join("config.json");
         std::fs::write(&path, "this is not json").expect("seed broken file");
         merge_settings(&path, two_keys()).expect("recover from a broken file");
         let saved: serde_json::Value =
@@ -634,7 +639,7 @@ mod tests {
     #[test]
     fn saving_settings_reports_a_file_it_cannot_write() {
         // The panel must not report "saved" when the write was refused.
-        let dir = scratch("read-only");
+        let (dir, _scratch) = scratch("read-only");
         let path = dir.join("config.json");
         std::fs::write(&path, "{}").expect("seed settings");
         // The file itself, not the directory: overwriting an existing file needs
@@ -650,7 +655,8 @@ mod tests {
 
     #[test]
     fn the_test_tone_is_a_wav_file_that_says_the_right_thing_about_itself() {
-        let path = scratch("tone").join("tone.wav");
+        let (dir, _scratch) = scratch("tone");
+        let path = dir.join("tone.wav");
         write_tone(&path).expect("write tone");
         let bytes = std::fs::read(&path).expect("read tone");
         assert_eq!(&bytes[0..4], b"RIFF");
@@ -733,7 +739,7 @@ mod tests {
     fn the_daemon_is_found_next_to_the_panel_when_bundled() {
         // In the AppImage both programs sit in the same directory; if this ever
         // resolves to a bare name the panel silently stops showing anything.
-        let dir = scratch("bundled");
+        let (dir, _scratch) = scratch("bundled");
         let panel = dir.join("monitor-audio-panel");
         let daemon = dir.join("monitor-audio");
         std::fs::write(&panel, b"panel").expect("write panel");
@@ -746,7 +752,7 @@ mod tests {
         // The unit's ExecStart is a copy of whatever install is given, so
         // handing it the panel would put a GUI on systemd's start line: the
         // service would look healthy while no audio followed any window.
-        let dir = scratch("not-the-panel");
+        let (dir, _scratch) = scratch("not-the-panel");
         let panel = dir.join("monitor-audio-panel");
         std::fs::write(&panel, b"panel").expect("write panel");
         assert_ne!(sibling_daemon(&panel).as_deref(), Some(panel.as_path()));
@@ -756,7 +762,7 @@ mod tests {
     fn a_panel_with_no_daemon_beside_it_resolves_to_no_bundled_backend() {
         // Falling back to a bare "monitor-audio" is a PATH lookup, not a file to
         // copy, so install must be able to tell that nothing was bundled.
-        let dir = scratch("lonely-panel");
+        let (dir, _scratch) = scratch("lonely-panel");
         let panel = dir.join("monitor-audio-panel");
         std::fs::write(&panel, b"panel").expect("write panel");
         assert_eq!(sibling_daemon(&panel), None);

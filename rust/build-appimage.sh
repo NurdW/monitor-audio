@@ -2,9 +2,8 @@
 # Build the Rust control panel into an AppImage.
 #
 # The point of the Rust build is that the file carries its own GUI toolkit, so it
-# runs on a machine with no PySide6 and no Qt Python bindings installed. That is
-# also why this is a separate script from ../build-appimage.sh: the Python build
-# ships scripts and relies on the system, this one ships binaries.
+# runs on a machine with no PySide6 and no Qt Python bindings installed: it ships
+# binaries instead of scripts that lean on whatever the host happens to provide.
 set -uo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"

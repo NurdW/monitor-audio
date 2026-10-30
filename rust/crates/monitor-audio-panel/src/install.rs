@@ -231,10 +231,16 @@ mod tests {
         }
     }
 
-    fn temp_roots(name: &str) -> Roots {
-        let home = std::env::temp_dir().join(format!("ma-panel-{}-{}", std::process::id(), name));
-        std::fs::create_dir_all(&home).expect("temp home");
-        Roots::from_home(&home)
+    /// A throwaway home that deletes itself, even when the test fails partway
+    /// through. The hand-written cleanup these tests ended with was exactly the
+    /// line a failed assertion skipped, so every red run left a directory in
+    /// /tmp for good.
+    fn temp_roots(name: &str) -> (Roots, tempfile::TempDir) {
+        let home = tempfile::Builder::new()
+            .prefix(&format!("ma-panel-{name}-"))
+            .tempdir()
+            .expect("temp home");
+        (Roots::from_home(home.path()), home)
     }
 
     fn fake_binary(roots: &Roots) -> PathBuf {
@@ -246,7 +252,7 @@ mod tests {
 
     #[test]
     fn install_puts_all_three_pieces_in_place() {
-        let roots = temp_roots("install");
+        let (roots, _home) = temp_roots("install");
         let binary = fake_binary(&roots);
         let runner = Recorded::default();
         let problems = install_files(&roots, &binary, &runner);
@@ -255,7 +261,6 @@ mod tests {
         assert!(roots.script_dir.join("metadata.json").is_file());
         assert!(roots.script_dir.join("contents/code/main.js").is_file());
         assert!(roots.unit_target.is_file());
-        std::fs::remove_dir_all(roots.script_dir.parent().unwrap().parent().unwrap()).ok();
     }
 
     #[test]
@@ -263,12 +268,11 @@ mod tests {
         // A copied file that lost its execute bit leaves systemd unable to start
         // the service, and the failure shows up as nothing happening at all.
         use std::os::unix::fs::PermissionsExt;
-        let roots = temp_roots("mode");
+        let (roots, _home) = temp_roots("mode");
         let binary = fake_binary(&roots);
         install_files(&roots, &binary, &Recorded::default());
         let mode = std::fs::metadata(&roots.backend_target).unwrap().permissions().mode();
         assert!(mode & 0o111 != 0, "installed binary is not executable: {:o}", mode);
-        std::fs::remove_dir_all(roots.script_dir.parent().unwrap().parent().unwrap()).ok();
     }
 
     #[test]
@@ -286,7 +290,8 @@ mod tests {
         // Checked with the tool that will actually load it, rather than by
         // eyeballing the string: a typo here means the service never starts and
         // the only symptom is that nothing happens.
-        let path = std::env::temp_dir().join(format!("ma-unit-{}.service", std::process::id()));
+        let dir = tempfile::tempdir().expect("temp dir for the unit");
+        let path = dir.path().join("monitor-audio.service");
         std::fs::write(&path, unit_text(Path::new("/bin/sleep"))).expect("write unit");
         let analysis = std::process::Command::new("systemd-analyze")
             .args(["verify", &path.to_string_lossy()])
@@ -303,12 +308,11 @@ mod tests {
             // A machine without the tool is a reason to say so, not to pass quietly.
             Err(err) => eprintln!("skipped: systemd-analyze is not available here ({})", err),
         }
-        std::fs::remove_file(&path).ok();
     }
 
     #[test]
     fn install_tells_systemd_and_kwin_about_the_change() {
-        let roots = temp_roots("commands");
+        let (roots, _home) = temp_roots("commands");
         let binary = fake_binary(&roots);
         let runner = Recorded::default();
         install_files(&roots, &binary, &runner);
@@ -319,7 +323,6 @@ mod tests {
         assert!(joined.iter().any(|c| c.contains("monitor-audioEnabled true")));
         assert!(joined.iter().any(|c| c.contains("kbuildsycoca6")));
         assert!(joined.iter().any(|c| c.contains("org.kde.KWin.reconfigure")));
-        std::fs::remove_dir_all(roots.script_dir.parent().unwrap().parent().unwrap()).ok();
     }
 
     #[test]
@@ -330,11 +333,10 @@ mod tests {
                 Err(format!("{}: refused", args[0]))
             }
         }
-        let roots = temp_roots("fails");
+        let (roots, _home) = temp_roots("fails");
         let binary = fake_binary(&roots);
         let problems = install_files(&roots, &binary, &AlwaysFails);
         assert!(!problems.is_empty(), "a command that failed must not pass silently");
-        std::fs::remove_dir_all(roots.script_dir.parent().unwrap().parent().unwrap()).ok();
     }
 
     #[test]
@@ -346,7 +348,7 @@ mod tests {
 
     #[test]
     fn remove_takes_everything_back_out() {
-        let roots = temp_roots("remove");
+        let (roots, _home) = temp_roots("remove");
         let binary = fake_binary(&roots);
         install_files(&roots, &binary, &Recorded::default());
         let problems = remove_files(&roots, &Recorded::default());
@@ -354,15 +356,13 @@ mod tests {
         assert!(!roots.backend_target.exists());
         assert!(!roots.unit_target.exists());
         assert!(!roots.script_dir.exists());
-        std::fs::remove_dir_all(roots.script_dir.parent().unwrap().parent().unwrap()).ok();
     }
 
     #[test]
     fn removing_something_that_was_never_installed_is_not_an_error() {
-        let roots = temp_roots("never");
+        let (roots, _home) = temp_roots("never");
         let problems = remove_files(&roots, &Recorded::default());
         assert_eq!(problems, Vec::<String>::new(), "reported: {:?}", problems);
-        std::fs::remove_dir_all(roots.script_dir.parent().unwrap().parent().unwrap()).ok();
     }
 
     #[test]

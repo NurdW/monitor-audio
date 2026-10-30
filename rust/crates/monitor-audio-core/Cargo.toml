@@ -11,3 +11,8 @@ path = "src/lib.rs"
 [dependencies]
 serde_json = "1"
 regex = "1"
+
+[dev-dependencies]
+# Test scratch space that deletes itself, so a failing test cannot leave files
+# behind in /tmp.
+tempfile = "3"
