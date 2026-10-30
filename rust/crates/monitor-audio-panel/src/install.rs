@@ -118,11 +118,15 @@ fn write_file(path: &Path, bytes: &[u8], executable: bool) -> Result<(), String>
 
 /// Copy the service, KWin script and systemd unit into place. The returned list
 /// says what went wrong; empty means everything worked.
-pub fn install_files(roots: &Roots, current_exe: &Path, runner: &dyn Runner) -> Vec<String> {
+/// `backend_source` is the daemon binary to install. It is a parameter rather
+/// than `current_exe` because the panel and the service are two programs: the
+/// panel asking to be installed as the service would produce a unit that starts
+/// a window and routes nothing.
+pub fn install_files(roots: &Roots, backend_source: &Path, runner: &dyn Runner) -> Vec<String> {
     let mut problems = Vec::new();
 
-    let binary = std::fs::read(current_exe)
-        .map_err(|err| format!("could not read the running program at {}: {}", current_exe.display(), err));
+    let binary = std::fs::read(backend_source)
+        .map_err(|err| format!("could not read the service binary at {}: {}", backend_source.display(), err));
     match binary {
         Ok(bytes) => {
             if let Err(err) = write_file(&roots.backend_target, &bytes, true) {

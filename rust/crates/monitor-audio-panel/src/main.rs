@@ -32,6 +32,16 @@ enum Tab {
     Log,
 }
 
+/// The daemon that sits beside a given program, if it is there.
+///
+/// The panel and the service ship side by side in the AppImage, so the copy next
+/// to the panel is the only daemon that is guaranteed to be the same version as
+/// the panel looking at it.
+fn sibling_daemon(exe: &Path) -> Option<PathBuf> {
+    let sibling = exe.parent()?.join("monitor-audio");
+    sibling.is_file().then_some(sibling)
+}
+
 /// The service's own command line. Asked over D-Bus would be tidier, but the panel
 /// and the service are separate programs and the command line is the interface
 /// both the KWin script and the Python panel already depend on, so it is the one
@@ -41,8 +51,7 @@ fn daemon_binary() -> PathBuf {
         return PathBuf::from(path);
     }
     if let Ok(exe) = std::env::current_exe() {
-        let sibling = exe.parent().unwrap_or(Path::new(".")).join("monitor-audio");
-        if sibling.is_file() {
+        if let Some(sibling) = sibling_daemon(&exe) {
             return sibling;
         }
     }
@@ -265,9 +274,15 @@ impl Panel {
             self.status = "HOME is not set, so I cannot tell where to install. Refusing to guess.".into();
             return;
         };
-        let exe = std::env::current_exe().unwrap_or_default();
-        let problems = install_files(&roots, &exe, &SystemRunner);
-        self.installed = true;
+        // The unit's ExecStart is a copy of whatever is handed to install_files,
+        // so this must be the daemon. Installing the panel instead puts a GUI on
+        // systemd's start line: the service appears to run and no audio ever
+        // follows a window.
+        let backend = daemon_binary();
+        let problems = install_files(&roots, &backend, &SystemRunner);
+        // A failed install must not flip the button to "Reinstall", or the panel
+        // claims to be installed while nothing is in place.
+        self.installed = problems.is_empty();
         self.status = if problems.is_empty() {
             "Installed. Drag a window to another monitor to try it.".to_string()
         } else {
@@ -718,7 +733,32 @@ mod tests {
     fn the_daemon_is_found_next_to_the_panel_when_bundled() {
         // In the AppImage both programs sit in the same directory; if this ever
         // resolves to a bare name the panel silently stops showing anything.
-        let path = daemon_binary();
-        assert!(!path.to_string_lossy().is_empty());
+        let dir = scratch("bundled");
+        let panel = dir.join("monitor-audio-panel");
+        let daemon = dir.join("monitor-audio");
+        std::fs::write(&panel, b"panel").expect("write panel");
+        std::fs::write(&daemon, b"daemon").expect("write daemon");
+        assert_eq!(sibling_daemon(&panel).as_deref(), Some(daemon.as_path()));
+    }
+
+    #[test]
+    fn installing_never_hands_the_panel_back_as_its_own_backend() {
+        // The unit's ExecStart is a copy of whatever install is given, so
+        // handing it the panel would put a GUI on systemd's start line: the
+        // service would look healthy while no audio followed any window.
+        let dir = scratch("not-the-panel");
+        let panel = dir.join("monitor-audio-panel");
+        std::fs::write(&panel, b"panel").expect("write panel");
+        assert_ne!(sibling_daemon(&panel).as_deref(), Some(panel.as_path()));
+    }
+
+    #[test]
+    fn a_panel_with_no_daemon_beside_it_resolves_to_no_bundled_backend() {
+        // Falling back to a bare "monitor-audio" is a PATH lookup, not a file to
+        // copy, so install must be able to tell that nothing was bundled.
+        let dir = scratch("lonely-panel");
+        let panel = dir.join("monitor-audio-panel");
+        std::fs::write(&panel, b"panel").expect("write panel");
+        assert_eq!(sibling_daemon(&panel), None);
     }
 }
