@@ -79,13 +79,27 @@ pub struct Snapshot {
     pub index_by_name: HashMap<String, String>,
     pub clients: HashMap<String, String>,
     pub streams: Vec<Stream>,
+    /// Which display the kernel says is wired to which sound card. Read fresh
+    /// every pass: it is a handful of small files, and it changes whenever a
+    /// monitor is plugged in or unplugged.
+    pub links: Vec<monitor_audio_core::hdmi::HdmiLink>,
 }
 
 impl Snapshot {
     pub fn new(sinks: Vec<Sink>, clients: HashMap<String, String>, streams: Vec<Stream>,
                config: Config) -> Snapshot {
         let index_by_name = sinks.iter().map(|s| (s.name.clone(), s.index.clone())).collect();
-        Snapshot { config, sinks, index_by_name, clients, streams }
+        Snapshot {
+            config,
+            sinks,
+            index_by_name,
+            clients,
+            streams,
+            links: monitor_audio_core::hdmi::read_links(
+                std::path::Path::new("/proc/asound"),
+                std::path::Path::new("/sys/class/sound"),
+            ),
+        }
     }
 
     pub fn gather(log: Log) -> Snapshot {

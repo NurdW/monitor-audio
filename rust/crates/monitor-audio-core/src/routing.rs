@@ -7,6 +7,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::config::Config;
+use crate::hdmi::{sink_slot, HdmiLink};
 use crate::snapshot::{Sink, Stream};
 use crate::Log;
 use crate::MIN_TITLE_LEN;
@@ -33,6 +34,17 @@ pub fn norm(value: &str) -> String {
 
 fn alnum_only(value: &str) -> String {
     value.chars().filter(|c| c.is_ascii_alphanumeric()).collect()
+}
+
+/// The output on the sound card the kernel reports this display is wired to.
+fn link_for<'a>(model: &str, links: &[HdmiLink], sinks: &'a [Sink]) -> Option<&'a Sink> {
+    let key = norm(model);
+    if key.is_empty() {
+        return None;
+    }
+    links.iter().filter(|link| norm(&link.model) == key).find_map(|link| {
+        sinks.iter().find(|sink| sink_slot(&sink.name).as_deref() == Some(link.card_slot.as_str()))
+    })
 }
 
 /// Fold an output description down to letters and digits, dropping the monitor
@@ -65,7 +77,13 @@ pub struct Route {
 /// Order matters: an explicit choice wins, then a display whose model an output
 /// names, then the fallback. Matching is on the display's model rather than on a
 /// sink name because sink names change when the profile changes and models do not.
-pub fn resolve_output(model: &str, sinks: &[Sink], config: &Config, log: Log) -> (Option<String>, String) {
+pub fn resolve_output(
+    model: &str,
+    sinks: &[Sink],
+    config: &Config,
+    links: &[HdmiLink],
+    log: Log,
+) -> (Option<String>, String) {
     if let Some(override_text) = config.manual_output.get(model) {
         let needle = override_text.trim();
         if !needle.is_empty() {
@@ -92,6 +110,18 @@ pub fn resolve_output(model: &str, sinks: &[Sink], config: &Config, log: Log) ->
                 })
                 .collect();
             if let Some(hit) = hits.first() {
+                return (Some(hit.name.clone()), "override".to_string());
+            }
+            if let Some(hit) = link_for(model, links, sinks) {
+                // The output the user chose still exists, it has just been renamed:
+                // the ALSA profile, and with it the whole sink name, changes
+                // whenever a monitor is plugged in or drops out. ELD still says
+                // which sound card this display is wired to, so the choice can be
+                // honoured under its new name instead of being thrown away.
+                log(&format!(
+                    "override '{}' for display {:?} is now {}",
+                    override_text, model, hit.name
+                ));
                 return (Some(hit.name.clone()), "override".to_string());
             }
             let names: Vec<&str> = sinks.iter().map(|sink| sink.name.as_str()).collect();
@@ -124,6 +154,14 @@ pub fn resolve_output(model: &str, sinks: &[Sink], config: &Config, log: Log) ->
                 return (Some(hits[0].name.clone()), "display".to_string());
             }
         }
+    }
+
+    // The kernel knows which display sits on which audio pin. This is the link
+    // that survives PipeWire leaving the monitor's name out of the description,
+    // which it does whenever the HDMI link is up but ELD has not been refreshed.
+    if let Some(hit) = link_for(model, links, sinks) {
+        log(&format!("display {:?} -> {} (that display is on that sound card)", model, hit.name));
+        return (Some(hit.name.clone()), "display".to_string());
     }
 
     if let Some(fallback) = sinks.iter().find(|sink| sink.name.contains(&config.fallback_kind)) {
@@ -240,7 +278,7 @@ Sink #48
         config
             .manual_output
             .insert("SAMSUNG".into(), "alsa_output.pci-0000_07_00.1.hdmi-stereo".into());
-        let (name, how) = resolve_output("SAMSUNG", &sinks(), &config, &quiet);
+        let (name, how) = resolve_output("SAMSUNG", &sinks(), &config, &[], &quiet);
         assert_eq!(how, "override");
         assert_eq!(
             name.as_deref(),
@@ -257,7 +295,7 @@ Sink #48
             "SAMSUNG".into(),
             "Navi 21/23 HDMI/DP Audio Controller Digital Stereo (HDMI) [SAMSUNG]".into(),
         );
-        let (name, how) = resolve_output("SAMSUNG", &sinks_without_tag(), &config, &quiet);
+        let (name, how) = resolve_output("SAMSUNG", &sinks_without_tag(), &config, &[], &quiet);
         assert_eq!(how, "override");
         assert_eq!(name.as_deref(), Some("alsa_output.pci-0000_07_00.1.hdmi-stereo"));
     }
@@ -270,21 +308,58 @@ Sink #48
         config
             .manual_output
             .insert("SAMSUNG".into(), "alsa_output.pci-0000_07_00.1.hdmi-stereo-extra1".into());
-        let (name, how) = resolve_output("SAMSUNG", &sinks(), &config, &quiet);
+        let (name, how) = resolve_output("SAMSUNG", &sinks(), &config, &[], &quiet);
         assert_eq!(how, "override-miss");
         assert_eq!(name, None);
     }
 
     #[test]
+    fn a_display_the_kernel_places_on_a_sound_card_owns_that_output() {
+        // PipeWire left the monitor's name out of the description, so nothing in
+        // the description links the display to an output. ELD still does.
+        let links = [crate::hdmi::HdmiLink {
+            model: "SAMSUNG".into(),
+            card_slot: "0000:07:00.1".into(),
+        }];
+        let (name, how) = resolve_output(
+            "SAMSUNG", &sinks_without_tag(), &Config::default(), &links, &quiet);
+        assert_eq!(how, "display");
+        assert_eq!(name.as_deref(), Some("alsa_output.pci-0000_07_00.1.hdmi-stereo"));
+    }
+
+    #[test]
+    fn an_override_survives_the_output_being_renamed() {
+        // The saved choice names a sink the ALSA profile no longer uses: plugging
+        // a monitor in or out renames these, which used to throw the choice away.
+        let renamed = parse_sinks(
+            "Sink #48\n\tName: alsa_output.pci-0000_07_00.1.hdmi-stereo-extra2\n\
+             \tDescription: Navi 21/23 HDMI/DP Audio Controller Digital Stereo (HDMI 3)\n");
+        let mut config = Config::default();
+        config.manual_output.insert(
+            "SAMSUNG".into(), "alsa_output.pci-0000_07_00.1.hdmi-stereo".into());
+        let links = [crate::hdmi::HdmiLink {
+            model: "SAMSUNG".into(),
+            card_slot: "0000:07:00.1".into(),
+        }];
+        let (name, how) = resolve_output("SAMSUNG", &renamed, &config, &links, &quiet);
+        assert_eq!(how, "override");
+        assert_eq!(
+            name.as_deref(),
+            Some("alsa_output.pci-0000_07_00.1.hdmi-stereo-extra2"),
+            "the chosen output followed its own rename"
+        );
+    }
+
+    #[test]
     fn a_display_named_in_an_output_owns_that_output() {
-        let (name, how) = resolve_output("SAMSUNG", &sinks(), &Config::default(), &quiet);
+        let (name, how) = resolve_output("SAMSUNG", &sinks(), &Config::default(), &[], &quiet);
         assert_eq!(how, "display");
         assert_eq!(name.as_deref(), Some("alsa_output.pci-0000_07_00.1.hdmi-stereo"));
     }
 
     #[test]
     fn a_display_with_no_audio_of_its_own_uses_the_fallback() {
-        let (name, how) = resolve_output("MAG 275QF X30", &sinks(), &Config::default(), &quiet);
+        let (name, how) = resolve_output("MAG 275QF X30", &sinks(), &Config::default(), &[], &quiet);
         assert_eq!(how, "fallback");
         assert_eq!(name.as_deref(), Some("alsa_output.pci-0000_09_00.4.analog-stereo"));
     }
@@ -293,7 +368,7 @@ Sink #48
     fn an_override_beats_the_model_match() {
         let mut config = Config::default();
         config.manual_output.insert("SAMSUNG".into(), "analog".into());
-        let (name, how) = resolve_output("SAMSUNG", &sinks(), &config, &quiet);
+        let (name, how) = resolve_output("SAMSUNG", &sinks(), &config, &[], &quiet);
         assert_eq!(how, "override");
         assert_eq!(name.as_deref(), Some("alsa_output.pci-0000_09_00.4.analog-stereo"));
     }
@@ -304,7 +379,7 @@ Sink #48
         config.manual_output.insert("SAMSUNG".into(), "nonexistent-card".into());
         let messages = std::cell::RefCell::new(Vec::new());
         let (name, how) = resolve_output(
-            "SAMSUNG", &sinks(), &config, &|msg| messages.borrow_mut().push(msg.to_string()));
+            "SAMSUNG", &sinks(), &config, &[], &|msg| messages.borrow_mut().push(msg.to_string()));
         assert_eq!(how, "override-miss");
         assert_eq!(name, None, "a stale override must not silently fall back");
         let messages = messages.borrow();
@@ -313,7 +388,7 @@ Sink #48
 
     #[test]
     fn no_outputs_at_all_is_reported_as_such() {
-        let (name, how) = resolve_output("SAMSUNG", &[], &Config::default(), &quiet);
+        let (name, how) = resolve_output("SAMSUNG", &[], &Config::default(), &[], &quiet);
         assert_eq!((name, how.as_str()), (None, "none"));
     }
 

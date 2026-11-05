@@ -5,6 +5,7 @@
 //! the two disagree, the Python behaviour is the bug to report, not to match.
 
 pub mod config;
+pub mod hdmi;
 pub mod routing;
 pub mod snapshot;
 

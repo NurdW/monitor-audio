@@ -47,14 +47,23 @@ struct KeepEntry {
     started: Instant,
 }
 
+/// Which window put a stream on an output, and which output that was.
+#[derive(Clone, Debug)]
+pub struct Placement {
+    pub window: String,
+    pub output: String,
+}
+
 pub struct State {
     /// window id -> route. Keyed by window and not by process: one Firefox can
     /// have a window on the TV and a window on the desk, and their audio must not
     /// follow each other.
     pub wanted: HashMap<String, RouteEntry>,
-    /// stream id -> window id that placed it. The point of this map is that a
-    /// stream is placed once and then left alone until the next real drag.
-    pub placed: HashMap<String, String>,
+    /// stream id -> what placed it, and where. The point of this map is that a
+    /// stream is placed once and then left alone until the next real drag - or
+    /// until the output it was placed on stops being the one this window resolves
+    /// to, which is what happens when the output is changed deliberately.
+    pub placed: HashMap<String, Placement>,
     keepalive: HashMap<String, KeepEntry>,
     /// An output whose silent stream would not start stays out of the way;
     /// retrying every pass would fill the log with the same failure.
@@ -160,7 +169,7 @@ impl State {
             .iter()
             .any(|(other, other_entry)| other != wid && other_entry.pid == pid);
         let Some(entry) = self.wanted.get_mut(wid) else { return 0 };
-        let (target, how) = routing::resolve_output(&entry.model, &snap.sinks, &snap.config, log);
+        let (target, how) = routing::resolve_output(&entry.model, &snap.sinks, &snap.config, &snap.links, log);
         let Some(target) = target else {
             // Nothing to send audio to. Say so once, not every few seconds.
             if !entry.warned {
@@ -189,22 +198,35 @@ impl State {
             if is_keepalive(stream, &silence) {
                 continue;
             }
-            if !force && self.placed.contains_key(&stream.iid) {
+            // Cloned so the map is not borrowed across the move below.
+            let placement = self.placed.get(&stream.iid).cloned();
+            // The one exception to leaving a placed stream alone: the output this
+            // window resolves to is no longer the one the stream sits on, which is
+            // what a deliberate change of output looks like from here.
+            let stale = placement.as_ref().map(|p| p.output != target).unwrap_or(false);
+            if !force && placement.is_some() && !stale {
                 continue;
             }
             if !routing::stream_belongs(stream, &route, &snap.clients, has_rival) {
                 continue;
             }
+            let why = if stale && !force { "output changed" } else { reason };
             if stream.sink == target_index {
-                self.placed.insert(stream.iid.clone(), wid.to_string());
+                self.placed.insert(
+                    stream.iid.clone(),
+                    Placement { window: wid.to_string(), output: target.clone() },
+                );
                 continue;
             }
             if !mover.move_stream(&stream.iid, &target, log) {
                 continue;
             }
-            self.placed.insert(stream.iid.clone(), wid.to_string());
+            self.placed.insert(
+                stream.iid.clone(),
+                Placement { window: wid.to_string(), output: target.clone() },
+            );
             moved += 1;
-            log(&format!("stream {} (window {}) -> {} [{}]", stream.iid, wid, target, reason));
+            log(&format!("stream {} (window {}) -> {} [{}]", stream.iid, wid, target, why));
         }
         moved
     }
@@ -268,7 +290,7 @@ impl State {
                 let placed_by = self
                     .placed
                     .get(&stream.iid)
-                    .map(|wid| format!("  (placed by {})", wid))
+                    .map(|p| format!("  (placed by {})", p.window))
                     .unwrap_or_default();
                 format!(
                     "  stream {} sink={} pids={} apps={} titles={}{}",
@@ -294,7 +316,7 @@ impl State {
             .iter()
             .map(|wid| {
                 let entry = &self.wanted[*wid];
-                let (output, how) = routing::resolve_output(&entry.model, &snap.sinks, &snap.config, &silent);
+                let (output, how) = routing::resolve_output(&entry.model, &snap.sinks, &snap.config, &snap.links, &silent);
                 serde_json::json!({
                     "window": wid,
                     "pid": entry.pid,
@@ -319,7 +341,7 @@ impl State {
                     "apps": stream.appkeys.iter().cloned().collect::<Vec<String>>(),
                     "titles": stream.titles.iter().cloned().collect::<Vec<String>>(),
                     "pids": routing::owner_pids(stream, &snap.clients).into_iter().collect::<Vec<String>>(),
-                    "placed_by": self.placed.get(&stream.iid),
+                    "placed_by": self.placed.get(&stream.iid).map(|p| p.window.clone()),
                 })
             })
             .collect();
@@ -367,7 +389,7 @@ impl State {
         for wid in windows {
             let entry = &self.wanted[wid];
             let (target, how) =
-                routing::resolve_output(&entry.model, &snap.sinks, &snap.config, &silent);
+                routing::resolve_output(&entry.model, &snap.sinks, &snap.config, &snap.links, &silent);
             lines.push(format!(
                 "window {} (pid {}) display {:?} -> {:?} [{}] (names: {}; captions: {})",
                 wid,
@@ -416,7 +438,7 @@ impl State {
         let streams: Vec<String> = self
             .placed
             .iter()
-            .filter(|(_, wid)| dropped.contains(wid))
+            .filter(|(_, placement)| dropped.contains(&placement.window))
             .map(|(iid, _)| iid.clone())
             .collect();
         for iid in streams {
@@ -515,7 +537,7 @@ impl State {
         // every pass was worse than leaving it up.
         let mut targets: BTreeSet<String> = BTreeSet::new();
         for entry in self.wanted.values() {
-            if let (Some(target), _) = routing::resolve_output(&entry.model, &snap.sinks, &snap.config, log) {
+            if let (Some(target), _) = routing::resolve_output(&entry.model, &snap.sinks, &snap.config, &snap.links, log) {
                 targets.insert(target);
             }
         }
@@ -800,6 +822,31 @@ mod tests {
     }
 
     #[test]
+    fn changing_the_output_for_a_display_moves_audio_that_is_already_playing() {
+        // Leaving a placed stream alone exists to stop the daemon fighting an
+        // application over a stream. It must not trap audio on an output the user
+        // has since changed their mind about.
+        let mut state = state_with("w1", route_entry("100", "SAMSUNG"));
+        let first = snapshot(vec![stream("5", "47", "100")]);
+        let recorder = Recorder::default();
+        assert_eq!(state.apply_window("w1", "first", false, &first, &recorder, &quiet), 1);
+
+        // Same display, different output now wins, and the stream sits where the
+        // previous pass put it.
+        let mut second = snapshot(vec![stream("5", "48", "100")]);
+        second.config.manual_output.insert("SAMSUNG".into(), "alsa.analog".into());
+        let messages = std::cell::RefCell::new(Vec::new());
+        let moved = state.apply_window(
+            "w1", "tick", false, &second, &recorder,
+            &|m| messages.borrow_mut().push(m.to_string()));
+        assert_eq!(moved, 1, "a changed output has to follow the audio already playing");
+        assert_eq!(recorder.moves.borrow().last().map(|(_, to)| to.as_str()), Some("alsa.analog"));
+        let messages = messages.borrow();
+        assert!(messages.iter().any(|m| m.contains("output changed")),
+                "the log has to say why it moved again: {:?}", messages);
+    }
+
+    #[test]
     fn a_window_on_the_tv_moves_its_stream_to_the_tv() {
         let mut state = state_with("w1", route_entry("100", "SAMSUNG"));
         let snap = snapshot(vec![stream("5", "47", "100")]);
@@ -807,7 +854,8 @@ mod tests {
         assert_eq!(state.apply_window("w1", "test", false, &snap, &recorder, &quiet), 1);
         assert_eq!(recorder.moves.borrow().as_slice(),
                    &[("5".to_string(), "alsa.hdmi".to_string())]);
-        assert_eq!(state.placed.get("5").map(String::as_str), Some("w1"));
+        assert_eq!(state.placed.get("5").map(|p| p.window.as_str()), Some("w1"));
+        assert_eq!(state.placed.get("5").map(|p| p.output.as_str()), Some("alsa.hdmi"));
     }
 
     #[test]
@@ -872,7 +920,7 @@ mod tests {
     #[test]
     fn placements_for_streams_that_went_away_are_pruned_even_when_switched_off() {
         let mut state = state_with("w1", route_entry("100", "SAMSUNG"));
-        state.placed.insert("5".to_string(), "w1".to_string());
+        state.placed.insert("5".to_string(), Placement { window: "w1".into(), output: "alsa.hdmi".into() });
         let mut snap = snapshot(vec![]);
         snap.config.enabled = false;
         state.apply_pending(&snap, &Recorder::default(), &quiet);
@@ -883,7 +931,7 @@ mod tests {
     #[test]
     fn forgetting_a_window_drops_its_placements_too() {
         let mut state = state_with("w1", route_entry("100", "SAMSUNG"));
-        state.placed.insert("5".to_string(), "w1".to_string());
+        state.placed.insert("5".to_string(), Placement { window: "w1".into(), output: "alsa.hdmi".into() });
         state.forget("w1", &quiet);
         assert!(state.wanted.is_empty() && state.placed.is_empty());
     }

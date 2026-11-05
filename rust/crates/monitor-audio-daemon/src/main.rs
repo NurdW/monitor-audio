@@ -272,7 +272,7 @@ fn cli_resolve(models_json: &str) -> String {
         snap.sinks.iter().map(|s| (s.name.as_str(), s.description.as_str())).collect();
     let mut answer = serde_json::Map::new();
     for model in models {
-        let (output, how) = monitor_audio_core::routing::resolve_output(&model, &snap.sinks, &snap.config, &log);
+        let (output, how) = monitor_audio_core::routing::resolve_output(&model, &snap.sinks, &snap.config, &snap.links, &log);
         answer.insert(
             model,
             serde_json::json!({
