@@ -35,6 +35,20 @@ fn alnum_only(value: &str) -> String {
     value.chars().filter(|c| c.is_ascii_alphanumeric()).collect()
 }
 
+/// Fold an output description down to letters and digits, dropping the monitor
+/// tag PipeWire appends.
+///
+/// PipeWire writes " [SAMSUNG]" onto an output description only while that display
+/// is detected, so a saved setting that kept the tag stops matching as soon as the
+/// TV sleeps or a cable is replugged.
+fn plain(value: &str) -> String {
+    let without_tag = match value.rfind('[') {
+        Some(start) if value.trim_end().ends_with(']') => &value[..start],
+        _ => value,
+    };
+    alnum_only(&without_tag.to_lowercase())
+}
+
 /// What the desktop told us about one window: enough to recognise its audio.
 #[derive(Clone, Debug, Default)]
 pub struct Route {
@@ -53,12 +67,28 @@ pub struct Route {
 /// sink name because sink names change when the profile changes and models do not.
 pub fn resolve_output(model: &str, sinks: &[Sink], config: &Config, log: Log) -> (Option<String>, String) {
     if let Some(override_text) = config.manual_output.get(model) {
-        let needle = norm(override_text);
+        let needle = override_text.trim();
         if !needle.is_empty() {
+            // A sink name is the stable identifier, and it is what the panel saves,
+            // so names are compared whole. norm() must never see a sink name: it
+            // shortens a dotted id to its last segment, and every ALSA output ends
+            // in the same segment, so "…hdmi-stereo" and "…analog-stereo" both
+            // became "stereo" and a name override matched every output and kept
+            // whichever PipeWire happened to list first.
+            let want_name = alnum_only(&needle.to_lowercase());
+            if let Some(hit) = sinks.iter().find(|sink| alnum_only(&sink.name) == want_name) {
+                return (Some(hit.name.clone()), "override".to_string());
+            }
+            // Anything else is a description, left over from the older panel or
+            // typed by hand. Matching either direction keeps working when the
+            // saved text carries a monitor tag the live description has lost.
+            let want = plain(needle);
             let hits: Vec<&Sink> = sinks
                 .iter()
                 .filter(|sink| {
-                    norm(&sink.name).contains(&needle) || norm(&sink.description).contains(&needle)
+                    let have = plain(&sink.description);
+                    !want.is_empty() && !have.is_empty()
+                        && (have.contains(&want) || want.contains(&have))
                 })
                 .collect();
             if let Some(hit) = hits.first() {
@@ -173,6 +203,20 @@ Sink #48
         parse_sinks(SINKS)
     }
 
+    /// The same hardware with the TV asleep: PipeWire drops the monitor tag.
+    const SINKS_WITHOUT_TAG: &str = "\
+Sink #47
+	Name: alsa_output.pci-0000_09_00.4.analog-stereo
+	Description: Starship/Matisse HD Audio Controller Analog Stereo
+Sink #48
+	Name: alsa_output.pci-0000_07_00.1.hdmi-stereo
+	Description: Navi 21/23 HDMI/DP Audio Controller Digital Stereo (HDMI)
+";
+
+    fn sinks_without_tag() -> Vec<Sink> {
+        parse_sinks(SINKS_WITHOUT_TAG)
+    }
+
     #[test]
     fn reverse_dns_ids_compare_on_their_last_part() {
         assert_eq!(norm("org.mozilla.firefox"), "firefox");
@@ -182,8 +226,53 @@ Sink #48
         // original did and what a name like "firefox-firefox" needs.
         assert_eq!(norm("firefox-firefox"), "firefoxfirefox");
         assert_eq!(norm("org.gnome.Nautilus"), "nautilus");
+        // This is why a sink name must never be matched through norm(): every ALSA
+        // output ends in the same segment, so the two outputs become identical.
+        assert_eq!(norm("alsa_output.pci-0000_07_00.1.hdmi-stereo"), "stereo");
+        assert_eq!(norm("alsa_output.pci-0000_09_00.4.analog-stereo"), "stereo");
         assert_eq!(norm("VLC"), "vlc");
         assert_eq!(norm(""), "");
+    }
+
+    #[test]
+    fn an_override_naming_a_sink_chooses_that_sink_not_whichever_is_listed_first() {
+        let mut config = Config::default();
+        config
+            .manual_output
+            .insert("SAMSUNG".into(), "alsa_output.pci-0000_07_00.1.hdmi-stereo".into());
+        let (name, how) = resolve_output("SAMSUNG", &sinks(), &config, &quiet);
+        assert_eq!(how, "override");
+        assert_eq!(
+            name.as_deref(),
+            Some("alsa_output.pci-0000_07_00.1.hdmi-stereo"),
+            "naming the HDMI output must not land on the analog one"
+        );
+    }
+
+    #[test]
+    fn an_override_saved_with_a_monitor_tag_still_matches_after_the_tag_is_gone() {
+        // The older panel stored the whole description, monitor tag included.
+        let mut config = Config::default();
+        config.manual_output.insert(
+            "SAMSUNG".into(),
+            "Navi 21/23 HDMI/DP Audio Controller Digital Stereo (HDMI) [SAMSUNG]".into(),
+        );
+        let (name, how) = resolve_output("SAMSUNG", &sinks_without_tag(), &config, &quiet);
+        assert_eq!(how, "override");
+        assert_eq!(name.as_deref(), Some("alsa_output.pci-0000_07_00.1.hdmi-stereo"));
+    }
+
+    #[test]
+    fn an_override_naming_a_sink_that_no_longer_exists_still_refuses_to_guess() {
+        // A name that has disappeared must not be matched by its shared "stereo"
+        // tail; that is how the wrong output used to win.
+        let mut config = Config::default();
+        config
+            .manual_output
+            .insert("SAMSUNG".into(), "alsa_output.pci-0000_07_00.1.hdmi-stereo-extra1".into());
+        let (name, how) = resolve_output("SAMSUNG", &sinks(), &config, &quiet);
+        assert_eq!(how, "override-miss");
+        assert_eq!(name, None);
     }
 
     #[test]
