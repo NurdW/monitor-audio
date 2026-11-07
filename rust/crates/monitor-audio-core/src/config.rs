@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Settings the control panel writes, read the same tolerant way the Python
 //! version read them: a broken file degrades to defaults rather than taking
 //! routing down with it.

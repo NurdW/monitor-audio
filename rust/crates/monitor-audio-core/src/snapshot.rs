@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Reading what PipeWire and its PulseAudio compatibility layer currently report.
 //!
 //! Parsing is done here rather than through a libpulse binding so the Rust port

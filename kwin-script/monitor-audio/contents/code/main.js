@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 /*
     Tell the monitor-audio service whenever a window is dragged onto a different
     monitor, or changes its title, so it can move that window's audio to that

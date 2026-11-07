@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Everything here talks to the machine: helper commands, paths, moving streams.
 //!
 //! Split from the decision code so the decisions can be tested with a made-up

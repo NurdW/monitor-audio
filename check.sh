@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Run every check this project has.
 #
 # The unit tests need no desktop, but several of them shell out to pactl, pw-dump

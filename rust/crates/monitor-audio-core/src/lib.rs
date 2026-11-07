@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Monitor Audio's decisions, kept free of D-Bus and of the GUI so they can be
 //! tested without a running session.
 //!

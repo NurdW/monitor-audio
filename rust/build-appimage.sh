@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Build the Rust control panel into an AppImage.
 #
 # The point of the Rust build is that the file carries its own GUI toolkit, so it

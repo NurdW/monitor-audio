@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! The decisions: which output a display owns, and which stream a window owns.
 //!
 //! These are the two functions worth getting right, and both are deliberately

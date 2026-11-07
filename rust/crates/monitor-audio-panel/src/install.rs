@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Putting the service in place, and taking it back out.
 //!
 //! Everything is parameterised by `Roots` and a `Runner` so the whole of this can

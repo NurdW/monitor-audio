@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Which monitors are plugged in, and what each one is called.
 //!
 //! The names have to match what the KWin script reports, because that is the key

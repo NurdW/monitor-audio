@@ -3,9 +3,9 @@ resolver = "2"
 members = ["crates/monitor-audio-core", "crates/monitor-audio-daemon", "crates/monitor-audio-panel"]
 
 [workspace.package]
-version = "1.0.0"
+version = "1.0.2"
 edition = "2021"
-license = "MIT"
+license = "GPL-3.0-or-later"
 
 # Static release build: the whole point of the rewrite is an AppImage that needs
 # no python3-pyside6 on the user's machine.

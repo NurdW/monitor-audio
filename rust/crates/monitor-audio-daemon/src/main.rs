@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! The service: a D-Bus name, one timer, and the same command line the Python
 //! version answered, so the control panel and the KWin script do not have to know
 //! which implementation is running.

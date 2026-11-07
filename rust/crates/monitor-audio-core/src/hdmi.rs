@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Which display is wired to which sound card, read from the kernel.
 //!
 //! PipeWire writes a monitor's name into an output description only while that

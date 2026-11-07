@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! The running state: which window wants which display's output, which streams
 //! have already been placed, and which outputs are being held awake.
 //!

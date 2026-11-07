@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! The control panel: what is routed where, and the buttons that install or
 //! remove the service.
 //!

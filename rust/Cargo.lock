@@ -1788,7 +1788,7 @@ dependencies = [
 
 [[package]]
 name = "monitor-audio-core"
-version = "1.0.0"
+version = "1.0.2"
 dependencies = [
  "regex",
  "serde_json",
@@ -1797,7 +1797,7 @@ dependencies = [
 
 [[package]]
 name = "monitor-audio-daemon"
-version = "1.0.0"
+version = "1.0.2"
 dependencies = [
  "monitor-audio-core",
  "serde",
@@ -1809,7 +1809,7 @@ dependencies = [
 
 [[package]]
 name = "monitor-audio-panel"
-version = "1.0.0"
+version = "1.0.2"
 dependencies = [
  "eframe",
  "monitor-audio-core",

@@ -93,4 +93,24 @@ that was the point of the rewrite.
 
 ## License
 
-MIT — see `LICENSE`.
+GPL-3.0-or-later. In plain terms:
+
+- You may use this for anything, including commercially, and you do not have to
+  tell anyone that you did.
+- You may change it, and you may share what you changed.
+- If you share it at all — changed or not, free or paid — you must pass on the same
+  freedoms: the complete source, under this same licence, and a note of what you
+  changed.
+
+That third point is the whole design, so it is worth saying out loud. Someone can
+legally sell a fork of this. What they can never do is sell it while keeping the
+source closed, because their buyers receive it under GPL-3.0 and may redistribute
+it freely from that moment on. That chain is what protects the work; a licence that
+forbade selling is not something open source offers, and this one does not pretend
+otherwise.
+
+Every source file carries an `SPDX-License-Identifier` line so the licence travels
+with a single file copied out of the tree.
+
+The `python-legacy` branch and the `v1.0.0` and `v1.0.1` tags were published under
+the MIT licence and stay under it — a licence already granted cannot be taken back.
